@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kinect-knob"
+version = "1.0.0"
+description = "Turn an invisible volume knob in the air: Kinect hand-gesture control for Home Assistant media players"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=2.0,<3",
+    "mediapipe>=0.10.31,<0.11",   # >=0.10.31 for numpy 2 support; Tasks API only
+    "opencv-contrib-python>=4.10", # same distribution mediapipe depends on
+    "fastapi>=0.111,<1",
+    "uvicorn>=0.30,<1",
+    "websockets>=12,<16",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.4"]
+
+[project.scripts]
+kinect-knob = "kinectknob.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"kinectknob.web" = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"

@@ -1,0 +1,61 @@
+# kinect-knob full configuration reference.
+# Everything here has a sensible default; env vars (KK_*) override this file.
+# Point at it with:  python -m kinectknob --config config.yaml   (or KK_CONFIG=...)
+
+ha:
+  url: http://192.168.1.10:8123
+  token: ""                                   # prefer KK_HA_TOKEN env var
+  volume_entity: media_player.bose_soundbar_700
+  media_entity: media_player.spotify_yash     # empty = same as volume_entity
+  max_volume: 0.9                             # gesture volume ceiling (0-1)
+  volume_step: 0.02                           # relative fallback step size
+
+capture:
+  backend: auto          # auto | kinect1 | kinect2 | webcam
+  webcam_index: 0
+  mirror: true           # selfie view; keep true so clockwise = louder
+  proc_width: 640        # tracking resolution; raise to 960 for more reach
+
+gate:                    # who is allowed to control the knob
+  use_depth: true        # needs a Kinect (depth camera)
+  depth_min_m: 0.5
+  depth_max_m: 3.0       # hands beyond this are ignored (guests, TV, pets)
+  min_hand_frac: 0.045   # min hand size vs frame height (distance proxy)
+
+knob:
+  engage_pinch: 0.42     # thumb-index distance / hand size to grip
+  release_pinch: 0.65    # hysteresis: release threshold
+  engage_frames: 3       # debounce frames (~100 ms at 30 fps)
+  release_frames: 5
+  full_scale_deg: 270.0  # degrees for silent -> full volume (like a real amp)
+  deadband_deg: 3.0      # wobble ignored around the grip point
+  invert: false
+  filter_min_cutoff: 1.2 # One Euro: lower = smoother at rest
+  filter_beta: 0.015     # One Euro: higher = snappier during fast twists
+  max_frame_delta_deg: 40.0
+  hand_lost_grace_s: 0.30
+  max_engage_speed: 0.6  # don't grip while the hand is flying around
+
+swipe:
+  enabled: true
+  window_s: 0.35
+  min_travel_frac: 0.18  # of frame width
+  min_speed_frac: 0.80   # frame-widths per second
+  max_vertical_ratio: 0.60
+  cooldown_s: 0.8
+  min_presence_s: 0.35   # hand must exist this long first (no drive-by skips)
+
+fist:                    # optional play/pause on closed-fist hold
+  enabled: false
+  hold_s: 0.7
+  max_speed_frac: 0.25
+  cooldown_s: 2.0
+
+web:
+  host: 0.0.0.0
+  port: 8420
+  debug_stream: true     # live MJPEG overlay at /debug/stream (on-demand only)
+
+model_path: models/hand_landmarker.task
+num_hands: 2
+log_level: INFO

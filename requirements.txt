@@ -1,0 +1,11 @@
+# Runtime dependencies — pins verified July 2026.
+mediapipe==0.10.35          # Tasks HandLandmarker; CPython 3.9-3.12 wheels; numpy 2 OK
+numpy>=2.0,<3
+opencv-contrib-python>=4.10 # the cv2 distribution mediapipe itself depends on
+fastapi>=0.111,<1
+uvicorn>=0.30,<1
+websockets>=12,<16
+PyYAML>=6.0
+# Needed by the freenect2 (Kinect v2) cffi binding at runtime; harmless elsewhere.
+cffi>=1.16
+Pillow>=10

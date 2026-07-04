@@ -1,0 +1,51 @@
+# kinect-knob on Unraid — use with the "Compose Manager Plus" plugin
+# (Community Applications), which builds from this file on the box itself.
+#
+# 1. Copy this whole project folder to /mnt/user/appdata/kinect-knob
+# 2. Copy .env.example to .env next to this file and fill it in
+# 3. Compose Manager: new stack -> point at this folder -> Compose Up
+#
+# Kinect v1 (Xbox 360): the nvidia runtime lines are unnecessary — you can
+# delete `runtime:` and the two NVIDIA_* variables; everything runs on CPU.
+services:
+  kinect-knob:
+    build: .
+    image: kinect-knob:local
+    container_name: kinect-knob
+    restart: unless-stopped
+    runtime: nvidia
+    ports:
+      - "8420:8420"
+    volumes:
+      # Whole-bus mount (NOT a single device node): the Kinect re-enumerates
+      # on driver init and after stalls, which breaks pinned device paths.
+      - /dev/bus/usb:/dev/bus/usb
+      # Optional deep tuning: copy config.example.yaml to config.yaml, edit,
+      # then uncomment this line AND set KK_CONFIG=/app/config.yaml in .env.
+      # - ./config.yaml:/app/config.yaml:ro
+    device_cgroup_rules:
+      - "c 189:* rmw"   # char major 189 = USB devices
+    environment:
+      # -- Home Assistant ---------------------------------------------------
+      - KK_HA_URL=${KK_HA_URL}
+      - KK_HA_TOKEN=${KK_HA_TOKEN}
+      - KK_VOLUME_ENTITY=${KK_VOLUME_ENTITY}
+      - KK_MEDIA_ENTITY=${KK_MEDIA_ENTITY}
+      - KK_MAX_VOLUME=${KK_MAX_VOLUME:-0.9}
+      # -- Capture ------------------------------------------------------------
+      - KK_BACKEND=${KK_BACKEND:-auto}
+      - KK_USE_DEPTH=${KK_USE_DEPTH:-true}
+      - KK_DEPTH_MIN_M=${KK_DEPTH_MIN_M:-0.5}
+      - KK_DEPTH_MAX_M=${KK_DEPTH_MAX_M:-3.0}
+      # -- Gestures -----------------------------------------------------------
+      - KK_SWIPE_ENABLED=${KK_SWIPE_ENABLED:-true}
+      - KK_PLAYPAUSE_ENABLED=${KK_PLAYPAUSE_ENABLED:-false}
+      - KK_FULL_SCALE_DEG=${KK_FULL_SCALE_DEG:-270}
+      - KK_INVERT_ROTATION=${KK_INVERT_ROTATION:-false}
+      - KK_CONFIG=${KK_CONFIG:-}
+      # -- GPU (Kinect v2 depth decode only) ----------------------------------
+      # Pin ONE of the two 1080 Tis by UUID (`nvidia-smi -L` on the host).
+      # Indices can swap across reboots; UUIDs never do.
+      - NVIDIA_VISIBLE_DEVICES=${GPU_UUID:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - KK_LOG_LEVEL=${KK_LOG_LEVEL:-INFO}
