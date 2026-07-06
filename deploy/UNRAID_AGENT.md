@@ -157,7 +157,30 @@ Success = soundbar volume moves / track skips, and the events appear in
    `config.example.yaml`.
 6. `/healthz` returns ok (Docker healthcheck uses it; HA can alert on it too).
 
-## 8. Guardrails
+## 8. Known incident (2026-07-06): server-wide hitching — FIXED, action required
+
+Symptom: the whole Unraid host hitches while the container runs, worst when
+hands are visible; web UI feels dead. Root cause: the freenect2 binding's
+frame listener raises `queue.Full` inside its cffi C callback whenever the
+consumer lags the sensor (90 frames/s), making cffi print a traceback **per
+frame** to stderr → unbounded Docker json-log write storm. Hand-tracking load
+is what tips the consumer over the edge, hence the hands-up correlation.
+
+Fixed in commits after `11638b1` (drop-oldest listener + newest-wins drain +
+log-size caps in compose). If the box is currently affected:
+
+```bash
+cd /mnt/user/appdata/kinect-knob
+docker logs kinect-knob 2>&1 | grep -c "queue.Full"        # >0 confirms it
+ls -lh "$(docker inspect --format='{{.LogPath}}' kinect-knob)"  # storm size
+git pull
+docker compose up -d --build    # rebuild is fast; only the app layer changes
+```
+
+The new build logs at most one "capture running behind the sensor" line per
+10 s instead — that line is informational, not a failure.
+
+## 9. Guardrails
 
 - Never commit `.env` or the token; never echo the token into logs.
 - Keep `KK_MAX_VOLUME=0.9` unless Yash explicitly raises it.

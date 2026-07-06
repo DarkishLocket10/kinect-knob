@@ -92,3 +92,35 @@ def test_snapshot_shape():
     snap = ctl.snapshot()
     assert snap["mode"] == "dry-run"
     assert "volume" in snap and "events" in snap
+
+
+def test_submit_delivers_events_through_the_loop():
+    async def scenario():
+        ctl = make_controller()
+        ctl.attach_loop(asyncio.get_running_loop())
+        ctl._sim_volume = 0.50
+        ctl.submit([KnobEngage(t=0.0), KnobTurn(t=0.1, deg=54.0, delta_deg=54.0)])
+        await asyncio.sleep(0)              # let call_soon_threadsafe land
+        for _ in range(2):
+            await ctl._handle(ctl._queue.get_nowait())
+        await ctl._flush_volume(force=True)
+        return ctl
+
+    ctl = run(scenario())
+    assert abs(ctl._sim_volume - 0.70) < 0.011
+
+
+def test_submit_overflow_drops_quietly():
+    async def scenario():
+        ctl = make_controller()
+        ctl.attach_loop(asyncio.get_running_loop())
+        # Fill the queue to the brim, then overflow it hard: nothing may raise
+        # (a raise here would reach asyncio's callback exception handler and
+        # log a traceback per event — the storm this guards against).
+        events = [KnobTurn(t=i / 30, deg=float(i), delta_deg=1.0) for i in range(400)]
+        ctl.submit(events)
+        await asyncio.sleep(0)
+        assert ctl._queue.qsize() == 256    # capacity, not 400
+        return ctl
+
+    run(scenario())

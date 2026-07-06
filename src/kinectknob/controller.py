@@ -55,6 +55,7 @@ class Controller:
         self._engaged = False
         self._relative_accum = 0.0                 # degrees, for relative fallback
         self._sim_volume = 0.5                     # dry-run simulated volume
+        self._next_overflow_log = 0.0
         self.events_log: deque[str] = deque(maxlen=30)
 
     # ------------------------------------------------------------------
@@ -65,11 +66,24 @@ class Controller:
         """Thread-safe: called from the vision thread."""
         if not events or self._loop is None:
             return
+        try:
+            self._loop.call_soon_threadsafe(self._enqueue, list(events))
+        except RuntimeError:
+            return  # loop shutting down
+
+    def _enqueue(self, events: list[GestureEvent]) -> None:
+        """Runs on the loop. A full queue must drop quietly, not raise into
+        asyncio's callback handler (which logs a traceback per event — a log
+        storm under sustained overload). Dropping a KnobTurn is safe: targets
+        are absolute, the next one lands exactly where the hand is."""
         for ev in events:
             try:
-                self._loop.call_soon_threadsafe(self._queue.put_nowait, ev)
-            except RuntimeError:
-                return  # loop shutting down
+                self._queue.put_nowait(ev)
+            except asyncio.QueueFull:
+                now = time.monotonic()
+                if now >= self._next_overflow_log:
+                    log.warning("event queue full — dropping gesture events (HA slow/stalled?)")
+                    self._next_overflow_log = now + 10.0
 
     async def run(self) -> None:
         sender = asyncio.create_task(self._volume_sender())

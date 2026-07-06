@@ -14,6 +14,13 @@ services:
     container_name: kinect-knob
     restart: unless-stopped
     runtime: nvidia
+    # Hard cap on log growth: an unexpected per-frame log/traceback storm
+    # (30-90 lines/s) must never be able to eat the host's disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "8420:8420"
     volumes:

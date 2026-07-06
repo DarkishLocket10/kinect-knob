@@ -35,6 +35,7 @@ from ..config import CaptureConfig
 from ..types import Frame
 from .base import CaptureBase, CaptureError
 from .ir import IrAutoSwitch, ir_to_rgb
+from .kv2_stream import LatestQueueListener, read_latest
 
 log = logging.getLogger("kk.cap.k2")
 
@@ -66,6 +67,9 @@ class KinectV2Capture(CaptureBase):
         self._latest: dict = {}
         self._ir_switch = IrAutoSwitch(cfg.ir_mode)
         self._ir_active = self._ir_switch.active
+        self._listener: LatestQueueListener | None = None
+        self._drops_reported = 0
+        self._next_drop_log = 0.0
 
     def start(self) -> None:
         try:
@@ -77,37 +81,46 @@ class KinectV2Capture(CaptureBase):
                 "does not work), and /dev/bus/usb passed into the container. "
                 f"({exc})"
             ) from exc
+        # Replace the binding's default listener: its bare put_nowait raises
+        # queue.Full inside the cffi C callback when the consumer lags, and
+        # cffi then prints a traceback PER FRAME (~90/s) — a stderr/log storm
+        # that can stagger the whole host. Ours drops the oldest frame
+        # silently instead. All three attributes must be set: the two
+        # properties rewire the C trampolines, and get_next_frame() reads
+        # _default_listener (private attr — freenect2 is pinned to 0.2.3).
+        self._listener = LatestQueueListener()
+        self._device._default_listener = self._listener
+        self._device.color_frame_listener = self._listener
+        self._device.ir_and_depth_frame_listener = self._listener
         self._running_ctx = self._device.running()
         self._running_ctx.__enter__()
         log.info("Kinect v2 streaming (1080p color + ToF depth, GPU depth pipeline)")
 
     def read(self) -> Optional[Frame]:
         FrameType = self._FrameType
-        deadline = time.monotonic() + _FRAME_TIMEOUT_S
-        # Drain until we hold a fresh color+depth (and IR, unless disabled) set.
         need_ir = self._ir_switch.mode != "off"
-        color = depth = ir = None
-        while True:
-            try:
-                type_, frame = self._device.get_next_frame(timeout=1.0)
-            except self._NoFrame:
-                if time.monotonic() > deadline:
-                    raise CaptureError(
-                        "Kinect v2 stopped delivering frames (USB stall) — restarting"
-                    ) from None
-                continue
-            if type_ is FrameType.Color:
-                color = frame
-            elif type_ is FrameType.Depth:
-                depth = frame
-            elif type_ is FrameType.Ir:
-                ir = frame
-            if color is not None and depth is not None and (ir is not None or not need_ir):
-                break
-            if time.monotonic() > deadline:
-                raise CaptureError("Kinect v2 frame pairing timed out — restarting") from None
+        needed = frozenset(
+            {FrameType.Color, FrameType.Depth} | ({FrameType.Ir} if need_ir else set())
+        )
+        try:
+            latest = read_latest(self._device, self._NoFrame, needed, _FRAME_TIMEOUT_S)
+        except TimeoutError as exc:
+            raise CaptureError(f"Kinect v2 stopped delivering frames — restarting ({exc})") from None
+        color = latest[FrameType.Color]
+        depth = latest[FrameType.Depth]
+        ir = latest.get(FrameType.Ir)
 
         t = time.monotonic()
+        # Dropping under load is by design (newest-wins), but make it visible
+        # at a glance instead of silent: one log line per 10 s at most.
+        dropped = self._listener.dropped if self._listener else 0
+        if dropped > self._drops_reported and t >= self._next_drop_log:
+            log.info(
+                "capture running behind the sensor: %d frames dropped so far "
+                "(newest-wins; expected under load)", dropped,
+            )
+            self._drops_reported = dropped
+            self._next_drop_log = t + 10.0
         raw = color.to_array()                       # (1080, 1920, 4) uint8
 
         if need_ir:

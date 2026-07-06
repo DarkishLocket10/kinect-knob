@@ -42,5 +42,7 @@ if (-not (Test-Path ".venv-dev")) {
 
 $args = @("-m", "kinectknob", "--backend", "webcam")
 if ($Preview) { $args += "--preview" }
-Write-Host "Web UI: http://localhost:8420  (Ctrl+C to stop)"
+# 127.0.0.1, not localhost: on Windows `localhost` tries ::1 first and eats
+# ~200 ms per fresh connection (uvicorn binds IPv4-only 0.0.0.0).
+Write-Host "Web UI: http://127.0.0.1:8420  (Ctrl+C to stop)"
 & .\.venv-dev\Scripts\python.exe @args
