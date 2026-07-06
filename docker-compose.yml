@@ -44,6 +44,9 @@ services:
       - KK_USE_DEPTH=${KK_USE_DEPTH:-true}
       - KK_DEPTH_MIN_M=${KK_DEPTH_MIN_M:-0.5}
       - KK_DEPTH_MAX_M=${KK_DEPTH_MAX_M:-3.0}
+      # Kinect v2 IR night mode (auto|off|always). Passthrough added so .env is
+      # authoritative; the app also defaults this to "auto" internally.
+      - KK_IR_MODE=${KK_IR_MODE:-auto}
       # -- Gestures -----------------------------------------------------------
       - KK_SWIPE_ENABLED=${KK_SWIPE_ENABLED:-true}
       - KK_PLAYPAUSE_ENABLED=${KK_PLAYPAUSE_ENABLED:-false}

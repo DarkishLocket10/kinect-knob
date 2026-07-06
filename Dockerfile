@@ -70,6 +70,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libusb-1.0-0 libturbojpeg \
     ocl-icd-libopencl1 clinfo \
     libgl1 libglib2.0-0 \
+    libegl1 libgles2 \
     ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
 
@@ -95,7 +96,11 @@ RUN mkdir -p /app/models && curl -fsSL -o /app/models/hand_landmarker.task \
 
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip3 install --no-cache-dir --no-deps .
+# Ubuntu 22.04 ships setuptools 59.6, which predates PEP 621 ([project] table)
+# support — installing without upgrading silently builds an empty "UNKNOWN"
+# package and the kinectknob module never lands in site-packages.
+RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel \
+ && pip3 install --no-cache-dir --no-deps .
 
 EXPOSE 8420
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \
