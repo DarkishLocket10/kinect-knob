@@ -1,5 +1,5 @@
 # Runtime dependencies — pins verified July 2026.
-mediapipe==0.10.35          # Tasks HandLandmarker; CPython 3.9-3.12 wheels; numpy 2 OK
+mediapipe==0.10.35          # Tasks HandLandmarker; universal py3 wheel (3.13 OK); numpy 2 OK
 numpy>=2.0,<3
 opencv-contrib-python>=4.10 # the cv2 distribution mediapipe itself depends on
 fastapi>=0.111,<1

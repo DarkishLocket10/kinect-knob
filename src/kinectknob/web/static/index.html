@@ -111,6 +111,7 @@ async function tick() {
       chip(s.fps + ' fps'),
       chip(s.proc_ms + ' ms/frame'),
       chip(s.has_depth ? 'depth: on' : 'depth: none', s.has_depth ? 'on' : 'warn'),
+      ...(s.ir_active ? [chip('IR night mode', 'on')] : []),
       c.mode === 'dry-run'
         ? chip('dry-run (no Home Assistant)', 'warn')
         : chip(c.ha_connected ? 'home assistant: connected' : 'home assistant: ' + (c.ha_error || 'connecting…'),

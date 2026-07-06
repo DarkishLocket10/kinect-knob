@@ -15,6 +15,7 @@ capture:
   webcam_index: 0
   mirror: true           # selfie view; keep true so clockwise = louder
   proc_width: 640        # tracking resolution; raise to 960 for more reach
+  ir_mode: auto          # Kinect v2 night mode: auto (switch when dark) | off | always
 
 gate:                    # who is allowed to control the knob
   use_depth: true        # needs a Kinect (depth camera)

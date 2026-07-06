@@ -71,6 +71,12 @@ Both are fully supported; the container auto-detects whichever is plugged in
 
 ## 3. Deploy on Unraid
 
+> **Deploying with an AI agent?** Point it at
+> [deploy/UNRAID_AGENT.md](deploy/UNRAID_AGENT.md) — a self-contained runbook
+> with the verified hardware facts, exact install steps, `.env` recreation
+> (it's gitignored and does not arrive with a clone), and the ordered
+> verification checklist. It supersedes this section where they differ.
+
 ```bash
 # on the Unraid box
 mkdir -p /mnt/user/appdata/kinect-knob && cd /mnt/user/appdata/kinect-knob
@@ -127,6 +133,12 @@ an open palm, sustained speed, mostly-horizontal travel, and a hand that's been
 visible ≥0.35 s (someone walking past can't skip your track); with a Kinect,
 **hands outside 0.5–3 m are ignored entirely** via the depth camera; and
 `KK_MAX_VOLUME` (default 0.9 in compose) hard-caps what a gesture can ever set.
+
+**Works in the dark (Kinect v2):** the ToF sensor carries its own IR
+illuminator, so when the room goes dark — movie night — the service
+automatically switches hand tracking to the active-infrared camera and back
+again when the lights come on (`KK_IR_MODE=auto`, the default; `always` /
+`off` to force). The web UI shows an *IR night mode* chip while it's active.
 
 ## 6. Tuning
 

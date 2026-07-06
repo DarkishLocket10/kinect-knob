@@ -27,12 +27,14 @@ class Frame:
     """One captured frame. ``rgb`` is HxWx3 uint8 in RGB order (already mirrored
     if mirroring is enabled). ``depth_mm`` — when the backend provides it — is an
     HxW uint16/float32 array of millimetre distances aligned to ``rgb`` pixels
-    (0 = no reading)."""
+    (0 = no reading). ``ir`` is True when ``rgb`` is really a tone-mapped
+    active-IR image (Kinect v2 night mode)."""
 
     rgb: np.ndarray
     depth_mm: Optional[np.ndarray]
     t: float          # time.monotonic() at capture
     seq: int
+    ir: bool = False
 
 
 @dataclass

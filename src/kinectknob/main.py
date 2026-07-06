@@ -203,7 +203,7 @@ class App:
             proc_ms = (now - t0) * 1000
             proc_ema = 0.9 * proc_ema + 0.1 * proc_ms if proc_ema else proc_ms
 
-            self.shared.update_vision(rgb, hands, engine.snapshot(), fps_ema, proc_ema)
+            self.shared.update_vision(rgb, hands, engine.snapshot(), fps_ema, proc_ema, ir=frame.ir)
 
             if self.preview:
                 from . import debugdraw

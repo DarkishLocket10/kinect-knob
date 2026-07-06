@@ -7,6 +7,11 @@
   ``with_big_depth=True`` yields a 1920x1082 depth map aligned to the color
   image (rows 1..1080 match color rows 0..1079); we crop and downscale it with
   nearest-neighbour so depth stays a per-pixel mm lookup in frame coordinates.
+* IR: 512x424 active infrared off the same ToF sensor — self-illuminated, so
+  it sees hands in a pitch-black room. When the color image goes dark
+  (``ir_mode: auto``) we hand MediaPipe the tone-mapped IR image instead, and
+  since IR and depth share the sensor the depth map is pixel-aligned with no
+  registration pass.
 
 Depth packet processing runs on the GPU: the Docker image builds libfreenect2
 with OpenCL and sets LIBFREENECT2_PIPELINE=cl, which on a GTX 1080 Ti decodes
@@ -29,6 +34,7 @@ import numpy as np
 from ..config import CaptureConfig
 from ..types import Frame
 from .base import CaptureBase, CaptureError
+from .ir import IrAutoSwitch, ir_to_rgb
 
 log = logging.getLogger("kk.cap.k2")
 
@@ -58,6 +64,8 @@ class KinectV2Capture(CaptureBase):
         self._device = None
         self._running_ctx = None
         self._latest: dict = {}
+        self._ir_switch = IrAutoSwitch(cfg.ir_mode)
+        self._ir_active = self._ir_switch.active
 
     def start(self) -> None:
         try:
@@ -76,8 +84,9 @@ class KinectV2Capture(CaptureBase):
     def read(self) -> Optional[Frame]:
         FrameType = self._FrameType
         deadline = time.monotonic() + _FRAME_TIMEOUT_S
-        # Drain until we hold a fresh color+depth pair.
-        color = depth = None
+        # Drain until we hold a fresh color+depth (and IR, unless disabled) set.
+        need_ir = self._ir_switch.mode != "off"
+        color = depth = ir = None
         while True:
             try:
                 type_, frame = self._device.get_next_frame(timeout=1.0)
@@ -91,13 +100,30 @@ class KinectV2Capture(CaptureBase):
                 color = frame
             elif type_ is FrameType.Depth:
                 depth = frame
-            if color is not None and depth is not None:
+            elif type_ is FrameType.Ir:
+                ir = frame
+            if color is not None and depth is not None and (ir is not None or not need_ir):
                 break
             if time.monotonic() > deadline:
                 raise CaptureError("Kinect v2 frame pairing timed out — restarting") from None
 
         t = time.monotonic()
         raw = color.to_array()                       # (1080, 1920, 4) uint8
+
+        if need_ir:
+            # Sparse-subsampled mean luma is plenty for the day/night decision.
+            use_ir = self._ir_switch.update(float(raw[::16, ::16, :3].mean()))
+            if use_ir != self._ir_active:
+                self._ir_active = use_ir
+                log.info(
+                    "%s (color luma %s the %s threshold for ~0.7 s)",
+                    "IR night mode ON — tracking on active infrared" if use_ir
+                    else "IR night mode OFF — back to color tracking",
+                    "below" if use_ir else "above",
+                    "dark" if use_ir else "bright",
+                )
+            if use_ir:
+                return self._ir_frame(ir, depth, t)
         # libfreenect2 emits BGRX on Linux/libusb builds, but some pipelines
         # produce RGBX — trust the frame's own format over an assumption.
         fmt = getattr(getattr(color, "format", None), "name", "")
@@ -125,6 +151,16 @@ class KinectV2Capture(CaptureBase):
 
         self._seq += 1
         return Frame(rgb=rgb, depth_mm=depth_mm, t=t, seq=self._seq)
+
+    def _ir_frame(self, ir, depth, t: float) -> Frame:
+        """Night mode: track on the tone-mapped IR image. IR and depth come off
+        the same sensor, so the raw depth array is already pixel-aligned —
+        no registration, and full native 512x424 resolution for both."""
+        rgb = ir_to_rgb(ir.to_array())
+        depth_mm = np.squeeze(depth.to_array()).astype(np.float32, copy=False)
+        depth_mm = np.nan_to_num(depth_mm, nan=0.0, posinf=0.0, neginf=0.0)
+        self._seq += 1
+        return Frame(rgb=rgb, depth_mm=depth_mm, t=t, seq=self._seq, ir=True)
 
     def stop(self) -> None:
         if self._running_ctx is not None:

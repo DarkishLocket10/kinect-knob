@@ -14,19 +14,26 @@ param([switch]$Preview)
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 
-# mediapipe ships wheels for Python 3.9-3.12 only.
-$py = $null
-foreach ($v in @("3.12", "3.11", "3.10")) {
-    try { & py "-$v" --version *> $null; if ($LASTEXITCODE -eq 0) { $py = $v; break } } catch {}
+# mediapipe 0.10.35+ ships a universal py3 Windows wheel, so any Python >=3.10 works.
+$pyCmd = $null
+foreach ($v in @("3.13", "3.12", "3.11", "3.10")) {
+    try { & py "-$v" --version *> $null; if ($LASTEXITCODE -eq 0) { $pyCmd = @("py", "-$v"); break } } catch {}
 }
-if (-not $py) {
-    Write-Error "Python 3.10-3.12 required (mediapipe has no 3.13 wheels yet). Install from python.org, e.g. 3.12."
+if (-not $pyCmd) {
+    # No py launcher — fall back to whatever `python` is, if it's new enough.
+    try {
+        $ver = & python -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null
+        if ($LASTEXITCODE -eq 0 -and [version]$ver -ge [version]"3.10") { $pyCmd = @("python") }
+    } catch {}
+}
+if (-not $pyCmd) {
+    Write-Error "Python 3.10+ required. Install from python.org."
     exit 1
 }
 
 if (-not (Test-Path ".venv-dev")) {
-    Write-Host "Creating dev venv with Python $py..."
-    & py "-$py" -m venv .venv-dev
+    Write-Host "Creating dev venv with $($pyCmd -join ' ')..."
+    & $pyCmd[0] @($pyCmd[1..($pyCmd.Length)] | Where-Object { $_ }) -m venv .venv-dev
 }
 & .\.venv-dev\Scripts\python.exe -m pip install --quiet --upgrade pip
 & .\.venv-dev\Scripts\python.exe -m pip install --quiet -r requirements.txt

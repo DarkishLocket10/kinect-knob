@@ -20,6 +20,7 @@ class SharedState:
         self.proc_ms: float = 0.0
         self.backend: str = ""
         self.has_depth: bool = False
+        self.ir_active: bool = False
         self.started_at: float = time.time()
         self.last_frame_t: float = 0.0                  # monotonic
 
@@ -30,6 +31,7 @@ class SharedState:
         engine: EngineSnapshot,
         fps: float,
         proc_ms: float,
+        ir: bool = False,
     ) -> None:
         with self._lock:
             self._rgb = rgb
@@ -37,6 +39,7 @@ class SharedState:
             self._engine = engine
             self.fps = fps
             self.proc_ms = proc_ms
+            self.ir_active = ir
             self.last_frame_t = time.monotonic()
 
     def render_data(self) -> tuple[Optional[np.ndarray], list[Hand], EngineSnapshot]:
@@ -53,6 +56,7 @@ class SharedState:
             return {
                 "backend": self.backend,
                 "has_depth": self.has_depth,
+                "ir_active": self.ir_active,
                 "fps": round(self.fps, 1),
                 "proc_ms": round(self.proc_ms, 1),
                 "uptime_s": int(time.time() - self.started_at),

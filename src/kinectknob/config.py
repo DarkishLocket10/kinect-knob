@@ -32,6 +32,7 @@ class CaptureConfig:
     fps: int = 30
     mirror: bool = True                 # selfie view: your right = image right
     proc_width: int = 640               # frames wider than this are downscaled before tracking
+    ir_mode: str = "auto"               # Kinect v2 night mode: auto | off | always
 
 
 @dataclass
@@ -110,6 +111,7 @@ _ENV_MAP: dict[str, tuple[str, str, str]] = {
     "KK_WEBCAM_INDEX": ("capture", "webcam_index", "int"),
     "KK_MIRROR": ("capture", "mirror", "bool"),
     "KK_PROC_WIDTH": ("capture", "proc_width", "int"),
+    "KK_IR_MODE": ("capture", "ir_mode", "str"),
     "KK_USE_DEPTH": ("gate", "use_depth", "bool"),
     "KK_DEPTH_MIN_M": ("gate", "depth_min_m", "float"),
     "KK_DEPTH_MAX_M": ("gate", "depth_max_m", "float"),
@@ -177,6 +179,9 @@ def load_config(path: Optional[str] = None) -> AppConfig:
         target = cfg if section == "" else getattr(cfg, section)
         setattr(target, key, value)
 
+    cfg.capture.ir_mode = cfg.capture.ir_mode.strip().lower()
+    if cfg.capture.ir_mode not in ("auto", "off", "always"):
+        raise ValueError(f"capture.ir_mode must be auto|off|always, got {cfg.capture.ir_mode!r}")
     if not cfg.ha.media_entity:
         cfg.ha.media_entity = cfg.ha.volume_entity
     cfg.ha.max_volume = min(max(cfg.ha.max_volume, 0.0), 1.0)
