@@ -7,7 +7,7 @@ Volume strategy (the part that makes the knob feel like hardware):
 * Every **turn** computes an absolute target:
       target = anchor + rotation_deg / full_scale_deg
   and stores it as "pending". A coalescer task ships the latest pending value
-  at most every `SEND_INTERVAL` seconds via ``media_player.volume_set``.
+  at most every ``ha.send_interval_s`` seconds via ``media_player.volume_set``.
   Absolute targets mean dropped/rate-limited intermediate sends cost nothing —
   the next send lands exactly where your hand is. No drift, no runaway.
 * On **release** the final target is flushed immediately.
@@ -34,7 +34,6 @@ from .types import FistHold, GestureEvent, KnobEngage, KnobRelease, KnobTurn, Sw
 
 log = logging.getLogger("kk.ctl")
 
-SEND_INTERVAL = 0.10          # max volume_set rate: 10/s
 # The Bose Music family (Soundbar 700) uses integer 0-100 volume internally,
 # so quantise to 0.01 — sub-step sends would be no-ops that just add traffic.
 VOLUME_QUANTUM = 0.01
@@ -171,14 +170,14 @@ class Controller:
     # ------------------------------------------------------------------
     async def _volume_sender(self) -> None:
         while True:
-            await asyncio.sleep(SEND_INTERVAL / 2)
+            await asyncio.sleep(self.cfg.ha.send_interval_s / 2)
             await self._flush_volume()
 
     async def _flush_volume(self, force: bool = False) -> None:
         if self._pending is None:
             return
         now = time.monotonic()
-        if not force and now - self._last_send_t < SEND_INTERVAL:
+        if not force and now - self._last_send_t < self.cfg.ha.send_interval_s:
             return
         target = round(round(self._pending / VOLUME_QUANTUM) * VOLUME_QUANTUM, 2)
         if self._last_sent is not None and abs(target - self._last_sent) < VOLUME_QUANTUM / 2:

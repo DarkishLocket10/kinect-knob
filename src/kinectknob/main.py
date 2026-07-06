@@ -168,7 +168,6 @@ class App:
     def _vision_loop(self, tracker, engine: GestureEngine) -> None:
         import cv2
 
-        proc_w = self.cfg.capture.proc_width
         dt_ema = 0.0    # smooth the interval, then invert: EMA of 1/dt reads
         proc_ema = 0.0  # high when frame intervals alternate (Jensen bias)
         last_t = time.monotonic()
@@ -187,6 +186,7 @@ class App:
             t0 = time.monotonic()
             rgb = frame.rgb
             fh, fw = rgb.shape[:2]
+            proc_w = self.cfg.capture.proc_width  # live-tunable from the dashboard
             if fw > proc_w:
                 scale = proc_w / fw
                 rgb = cv2.resize(rgb, (proc_w, int(round(fh * scale))), interpolation=cv2.INTER_AREA)

@@ -78,10 +78,27 @@ TUNABLES: tuple[Tunable, ...] = (
         "float", "Volume limits & feel", 0.005, 0.10, 0.005, "%",
     ),
     Tunable(
+        "ha.send_interval_s", "Volume update rate",
+        "Minimum gap between volume commands sent to the soundbar while you "
+        "twist. Lower = the dial tracks your hand more tightly (more "
+        "responsive); too low can flood Home Assistant or the Bose and "
+        "actually add lag. 0.05 s (20 updates/s) is a good aggressive value.",
+        "float", "Volume limits & feel", 0.03, 0.30, 0.01, "s",
+    ),
+    Tunable(
         "knob.invert", "Invert rotation",
         "Flip which twist direction means louder. If clockwise turns the volume "
         "down, toggle this.",
         "bool", "Volume limits & feel",
+    ),
+    Tunable(
+        "capture.proc_width", "Tracking resolution",
+        "Frame width (pixels) the hand tracker runs on. Lower = every frame "
+        "processes faster and latency drops, but small/distant hands get "
+        "harder to see. Applies to new frames immediately when lowering; "
+        "raising it above the value the app started with needs a container "
+        "restart to take full effect.",
+        "int", "Performance", 384, 960, 32, "px",
     ),
     # ------------------------------------------------ grip recognition
     Tunable(

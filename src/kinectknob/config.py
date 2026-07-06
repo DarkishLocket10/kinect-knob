@@ -21,6 +21,7 @@ class HAConfig:
     media_entity: str = ""              # defaults to volume_entity if empty
     max_volume: float = 1.0             # safety ceiling for gesture-set volume
     volume_step: float = 0.02           # fallback relative step when no state known
+    send_interval_s: float = 0.10       # min gap between volume_set calls while twisting
 
 
 @dataclass
