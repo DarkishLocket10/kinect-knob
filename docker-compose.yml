@@ -53,9 +53,14 @@ services:
       - KK_FULL_SCALE_DEG=${KK_FULL_SCALE_DEG:-270}
       - KK_INVERT_ROTATION=${KK_INVERT_ROTATION:-false}
       - KK_CONFIG=${KK_CONFIG:-}
-      # -- GPU (Kinect v2 depth decode only) ----------------------------------
+      # -- GPU ------------------------------------------------------------------
       # Pin ONE of the two 1080 Tis by UUID (`nvidia-smi -L` on the host).
       # Indices can swap across reboots; UUIDs never do.
       - NVIDIA_VISIBLE_DEVICES=${GPU_UUID:-all}
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # graphics: mounts the EGL/GLES driver libs for the optional MediaPipe
+      # GPU delegate below; harmless when inference stays on CPU.
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+      # Hand landmarker inference: cpu (default, XNNPACK) | gpu (GL ES via EGL,
+      # ~3 ms/frame faster on the 1080 Ti — opt-in until soaked on hardware).
+      - KK_MP_DELEGATE=${KK_MP_DELEGATE:-cpu}
       - KK_LOG_LEVEL=${KK_LOG_LEVEL:-INFO}

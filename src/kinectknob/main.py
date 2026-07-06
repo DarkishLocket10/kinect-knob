@@ -96,7 +96,7 @@ class App:
         self.shared.backend = capture.name
         self.shared.has_depth = capture.has_depth
 
-        tracker = HandTracker(self.cfg.model_path, self.cfg.num_hands)
+        tracker = HandTracker(self.cfg.model_path, self.cfg.num_hands, self.cfg.mp_delegate)
         engine = GestureEngine(self.cfg)
 
         threads = [
@@ -137,6 +137,8 @@ class App:
 
     # ------------------------------------------------------------------
     def _capture_loop(self, capture) -> None:
+        import cv2
+
         mirror = self.cfg.capture.mirror
         try:
             while not self.stop_event.is_set():
@@ -144,9 +146,11 @@ class App:
                 if frame is None:
                     continue
                 if mirror:
-                    frame.rgb = np.ascontiguousarray(frame.rgb[:, ::-1])
+                    # cv2.flip is a plain SIMD copy — ~3x faster than
+                    # materialising a negative-stride numpy view.
+                    frame.rgb = cv2.flip(frame.rgb, 1)
                     if frame.depth_mm is not None:
-                        frame.depth_mm = np.ascontiguousarray(frame.depth_mm[:, ::-1])
+                        frame.depth_mm = cv2.flip(frame.depth_mm, 1)
                 self.slot.put(frame)
         except CaptureError as exc:
             log.critical("capture device failed: %s", exc)

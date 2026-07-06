@@ -79,6 +79,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # libfreenect2 silently falls back to the (too slow) CPU pipeline.
 RUN mkdir -p /etc/OpenCL/vendors && echo "libnvidia-opencl.so.1" > /etc/OpenCL/vendors/nvidia.icd
 
+# Same story for EGL: glvnd only ships the Mesa ICD, so EGL routes to a driver
+# with no device and the MediaPipe GPU delegate (KK_MP_DELEGATE=gpu) dies with
+# "Unable to initialize EGL". Register the NVIDIA EGL driver the runtime mounts.
+RUN mkdir -p /usr/share/glvnd/egl_vendor.d \
+ && printf '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_nvidia.so.0"}}' \
+    > /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+
 # Compiled Kinect stacks (libs + the cython 'freenect' module in dist-packages).
 COPY --from=build /usr/local /usr/local
 RUN ldconfig

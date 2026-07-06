@@ -21,9 +21,20 @@ log = logging.getLogger("kk.track")
 
 
 class HandTracker:
-    def __init__(self, model_path: str, num_hands: int = 2):
+    def __init__(self, model_path: str, num_hands: int = 2, delegate: str = "cpu"):
+        # GPU runs on GL ES via EGL; needs NVIDIA_DRIVER_CAPABILITIES to include
+        # `graphics` and the glvnd vendor JSON (both set up by the Docker image).
+        # Measured on the 1080 Ti it saves ~3 ms/frame over XNNPACK — worthwhile,
+        # but opt-in (KK_MP_DELEGATE=gpu) until it has soaked on real hardware.
+        mp_delegate = (
+            mp_python.BaseOptions.Delegate.GPU
+            if delegate == "gpu"
+            else mp_python.BaseOptions.Delegate.CPU
+        )
         options = mp_vision.HandLandmarkerOptions(
-            base_options=mp_python.BaseOptions(model_asset_path=model_path),
+            base_options=mp_python.BaseOptions(
+                model_asset_path=model_path, delegate=mp_delegate
+            ),
             running_mode=mp_vision.RunningMode.VIDEO,
             num_hands=num_hands,
             min_hand_detection_confidence=0.5,
@@ -32,7 +43,10 @@ class HandTracker:
         )
         self._landmarker = mp_vision.HandLandmarker.create_from_options(options)
         self._last_ts_ms = -1
-        log.info("HandLandmarker ready (model=%s, num_hands=%d)", model_path, num_hands)
+        log.info(
+            "HandLandmarker ready (model=%s, num_hands=%d, delegate=%s)",
+            model_path, num_hands, delegate,
+        )
 
     def process(self, rgb: np.ndarray, t: float) -> list[Hand]:
         """rgb: HxWx3 uint8 RGB (contiguous). t: monotonic seconds."""

@@ -96,6 +96,7 @@ class AppConfig:
     web: WebConfig = field(default_factory=WebConfig)
     model_path: str = "models/hand_landmarker.task"
     num_hands: int = 2
+    mp_delegate: str = "cpu"            # hand landmarker inference: cpu | gpu
     log_level: str = "INFO"
 
 
@@ -125,6 +126,7 @@ _ENV_MAP: dict[str, tuple[str, str, str]] = {
     "KK_DEBUG_STREAM": ("web", "debug_stream", "bool"),
     "KK_MODEL_PATH": ("", "model_path", "str"),
     "KK_NUM_HANDS": ("", "num_hands", "int"),
+    "KK_MP_DELEGATE": ("", "mp_delegate", "str"),
     "KK_LOG_LEVEL": ("", "log_level", "str"),
 }
 
@@ -182,6 +184,9 @@ def load_config(path: Optional[str] = None) -> AppConfig:
     cfg.capture.ir_mode = cfg.capture.ir_mode.strip().lower()
     if cfg.capture.ir_mode not in ("auto", "off", "always"):
         raise ValueError(f"capture.ir_mode must be auto|off|always, got {cfg.capture.ir_mode!r}")
+    cfg.mp_delegate = cfg.mp_delegate.strip().lower()
+    if cfg.mp_delegate not in ("cpu", "gpu"):
+        raise ValueError(f"mp_delegate must be cpu|gpu, got {cfg.mp_delegate!r}")
     if not cfg.ha.media_entity:
         cfg.ha.media_entity = cfg.ha.volume_entity
     cfg.ha.max_volume = min(max(cfg.ha.max_volume, 0.0), 1.0)

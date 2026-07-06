@@ -1,12 +1,17 @@
 """Xbox One Kinect (v2) backend via the cffi-based ``freenect2`` package.
 
-* Color: 1920x1080 @ 30fps, BGRX 4-channel on Linux. We downscale to
-  ~960px width before handing frames on — plenty for hand landmarks and it
-  keeps CPU flat.
+* Color: 1920x1080 @ 30fps, BGRX 4-channel on Linux. We downscale straight to
+  the configured processing width (default 640) before anything else touches
+  the pixels: resizing the 4-channel frame first and color-converting the
+  small result is ~5x cheaper than converting at full res, and emitting
+  proc-width frames means the vision loop never has to resize again.
 * Depth: 512x424 time-of-flight, float32 mm. ``Registration.apply`` with
   ``with_big_depth=True`` yields a 1920x1082 depth map aligned to the color
   image (rows 1..1080 match color rows 0..1079); we crop and downscale it with
   nearest-neighbour so depth stays a per-pixel mm lookup in frame coordinates.
+  Registration is the most expensive per-frame step and only feeds the
+  distance gate, so it runs on every second frame and the frames in between
+  reuse the cached map (a 3 m gate does not need 30 Hz depth).
 * IR: 512x424 active infrared off the same ToF sensor — self-illuminated, so
   it sees hands in a pitch-black room. When the color image goes dark
   (``ir_mode: auto``) we hand MediaPipe the tone-mapped IR image instead, and
@@ -40,7 +45,7 @@ from .kv2_stream import LatestQueueListener, read_latest
 log = logging.getLogger("kk.cap.k2")
 
 _FRAME_TIMEOUT_S = 5.0     # no frames for this long -> declare the device stalled
-_TARGET_WIDTH = 960        # downscale 1920 -> 960 for tracking
+_DEPTH_EVERY_N = 2         # run registration on every Nth frame, cache between
 
 
 class KinectV2Capture(CaptureBase):
@@ -70,6 +75,12 @@ class KinectV2Capture(CaptureBase):
         self._listener: LatestQueueListener | None = None
         self._drops_reported = 0
         self._next_drop_log = 0.0
+        self._depth_cache: Optional[np.ndarray] = None
+        # ir_mode is fixed for the process lifetime, so the needed-frames set is too.
+        need_ir = cfg.ir_mode != "off"
+        self._needed = frozenset(
+            {FrameType.Color, FrameType.Depth} | ({FrameType.Ir} if need_ir else set())
+        )
 
     def start(self) -> None:
         try:
@@ -99,11 +110,8 @@ class KinectV2Capture(CaptureBase):
     def read(self) -> Optional[Frame]:
         FrameType = self._FrameType
         need_ir = self._ir_switch.mode != "off"
-        needed = frozenset(
-            {FrameType.Color, FrameType.Depth} | ({FrameType.Ir} if need_ir else set())
-        )
         try:
-            latest = read_latest(self._device, self._NoFrame, needed, _FRAME_TIMEOUT_S)
+            latest = read_latest(self._device, self._NoFrame, self._needed, _FRAME_TIMEOUT_S)
         except TimeoutError as exc:
             raise CaptureError(f"Kinect v2 stopped delivering frames — restarting ({exc})") from None
         color = latest[FrameType.Color]
@@ -128,6 +136,7 @@ class KinectV2Capture(CaptureBase):
             use_ir = self._ir_switch.update(float(raw[::16, ::16, :3].mean()))
             if use_ir != self._ir_active:
                 self._ir_active = use_ir
+                self._depth_cache = None  # depth res/alignment differs per mode
                 log.info(
                     "%s (color luma %s the %s threshold for ~0.7 s)",
                     "IR night mode ON — tracking on active infrared" if use_ir
@@ -137,33 +146,37 @@ class KinectV2Capture(CaptureBase):
                 )
             if use_ir:
                 return self._ir_frame(ir, depth, t)
+        # Downscale the 4-channel frame FIRST, then color-convert the small
+        # result — same output, ~5x less pixel work than converting at 1080p.
+        target_w = self.cfg.proc_width
+        scale = target_w / raw.shape[1]
+        size = (target_w, int(round(raw.shape[0] * scale)))
+        small = cv2.resize(raw, size, interpolation=cv2.INTER_AREA)
         # libfreenect2 emits BGRX on Linux/libusb builds, but some pipelines
         # produce RGBX — trust the frame's own format over an assumption.
         fmt = getattr(getattr(color, "format", None), "name", "")
         if fmt == "RGBX":
-            rgb_full = cv2.cvtColor(raw, cv2.COLOR_RGBA2RGB)
+            rgb = cv2.cvtColor(small, cv2.COLOR_RGBA2RGB)
         else:
-            rgb_full = cv2.cvtColor(raw, cv2.COLOR_BGRA2RGB)
+            rgb = cv2.cvtColor(small, cv2.COLOR_BGRA2RGB)
 
-        scale = _TARGET_WIDTH / rgb_full.shape[1]
-        size = (_TARGET_WIDTH, int(round(rgb_full.shape[0] * scale)))
-        rgb = cv2.resize(rgb_full, size, interpolation=cv2.INTER_AREA)
-
-        depth_mm = None
-        try:
-            _, _, big_depth = self._device.registration.apply(
-                color, depth, with_big_depth=True
-            )
-            big = big_depth.to_array()               # (1082, 1920) float32 mm
-            aligned = big[1:-1, :]                   # rows align with color
-            depth_small = cv2.resize(aligned, size, interpolation=cv2.INTER_NEAREST)
-            depth_small = np.nan_to_num(depth_small, nan=0.0, posinf=0.0, neginf=0.0)
-            depth_mm = depth_small
-        except Exception:  # noqa: BLE001 — depth alignment is best-effort
-            log.debug("registration failed for a frame", exc_info=True)
+        if self._seq % _DEPTH_EVERY_N == 0 or self._depth_cache is None:
+            try:
+                _, _, big_depth = self._device.registration.apply(
+                    color, depth, with_big_depth=True
+                )
+                big = big_depth.to_array()           # (1082, 1920) float32 mm
+                aligned = big[1:-1, :]               # rows align with color
+                depth_small = cv2.resize(aligned, size, interpolation=cv2.INTER_NEAREST)
+                self._depth_cache = np.nan_to_num(
+                    depth_small, copy=False, nan=0.0, posinf=0.0, neginf=0.0
+                )
+            except Exception:  # noqa: BLE001 — depth alignment is best-effort,
+                # and on failure the gate keeps using the previous cached map
+                log.debug("registration failed for a frame", exc_info=True)
 
         self._seq += 1
-        return Frame(rgb=rgb, depth_mm=depth_mm, t=t, seq=self._seq)
+        return Frame(rgb=rgb, depth_mm=self._depth_cache, t=t, seq=self._seq)
 
     def _ir_frame(self, ir, depth, t: float) -> Frame:
         """Night mode: track on the tone-mapped IR image. IR and depth come off

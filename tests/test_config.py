@@ -57,6 +57,20 @@ def test_max_volume_clamped():
         assert load_config(None).ha.max_volume == 1.0
 
 
+def test_mp_delegate_default_and_env():
+    assert load_config(None).mp_delegate == "cpu"
+    with mock.patch.dict(os.environ, {"KK_MP_DELEGATE": "GPU"}, clear=False):
+        assert load_config(None).mp_delegate == "gpu"  # normalized
+
+
+def test_mp_delegate_rejects_unknown():
+    import pytest
+
+    with mock.patch.dict(os.environ, {"KK_MP_DELEGATE": "tpu"}, clear=False):
+        with pytest.raises(ValueError, match="mp_delegate"):
+            load_config(None)
+
+
 def test_unknown_yaml_key_rejected(tmp_path):
     bad = tmp_path / "bad.yaml"
     bad.write_text("knob:\n  full_scale_degrees: 300\n")  # typo'd key
