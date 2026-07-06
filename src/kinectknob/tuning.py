@@ -215,7 +215,16 @@ TUNABLES: tuple[Tunable, ...] = (
     # ------------------------------------------------ swipe
     Tunable(
         "swipe.enabled", "Swipes enabled",
-        "Open-palm swipe left/right to skip tracks.",
+        "Swipe left/right to skip tracks.",
+        "bool", "Swipe (track skip)",
+    ),
+    Tunable(
+        "swipe.two_finger", "Two-finger swipe pose",
+        "On: swipe with index+middle extended, other fingers curled — a "
+        "deliberate pose that rarely happens by accident, so detection can be "
+        "generous with fast motion. Off: the old open-palm swipe. The Live "
+        "tracking 'pose' readout shows 'two' when the pose is being read "
+        "correctly.",
         "bool", "Swipe (track skip)",
     ),
     Tunable(

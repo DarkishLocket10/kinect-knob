@@ -78,9 +78,9 @@ def test_unmirrored_swipe_direction_compensated(cfg):
 
     cfg.capture.mirror = False
     tl = Timeline(GestureEngine(cfg))
-    tl.step([make_hand(pose="open", center=(180, 300))], n=15)
+    tl.step([make_hand(pose="two", center=(180, 300))], n=15)
     for i in range(1, 7):  # moves right on screen = user's LEFT in raw view
-        tl.step([make_hand(pose="open", center=(180 + i * 40, 300))])
+        tl.step([make_hand(pose="two", center=(180 + i * 40, 300))])
     swipes = [e for e in tl.events if isinstance(e, Swipe)]
     assert len(swipes) == 1
     assert swipes[0].direction == -1

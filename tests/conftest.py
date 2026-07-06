@@ -40,6 +40,10 @@ def make_hand(
         grip = np.array([-40.0, -100.0]) * scale
         pts[4] = grip + (scale * 6, 0)
         pts[8] = grip - (scale * 6, 0)
+    elif pose == "two":
+        # Index + middle extended (as in the base hand), ring + pinky curled.
+        for tip, pip in ((16, 14), (20, 18)):
+            pts[tip] = pts[pip] * 0.55
     elif pose == "fist":
         # Fold all four fingers: tips pulled back near the knuckles.
         for tip, pip in zip(_FINGER_TIPS, _FINGER_PIPS):

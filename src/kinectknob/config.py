@@ -65,6 +65,7 @@ class KnobConfig:
 @dataclass
 class SwipeConfig:
     enabled: bool = True
+    two_finger: bool = True             # swipe pose: index+middle out (else open palm)
     invert: bool = False                # flip which direction means next/previous
     window_s: float = 0.35              # motion window evaluated for a swipe
     min_travel_frac: float = 0.18       # min horizontal travel (fraction of frame width)
@@ -125,6 +126,7 @@ _ENV_MAP: dict[str, tuple[str, str, str]] = {
     "KK_INVERT_ROTATION": ("knob", "invert", "bool"),
     "KK_DEADBAND_DEG": ("knob", "deadband_deg", "float"),
     "KK_SWIPE_ENABLED": ("swipe", "enabled", "bool"),
+    "KK_SWIPE_TWO_FINGER": ("swipe", "two_finger", "bool"),
     "KK_INVERT_SWIPE": ("swipe", "invert", "bool"),
     "KK_PLAYPAUSE_ENABLED": ("fist", "enabled", "bool"),
     "KK_PORT": ("web", "port", "int"),

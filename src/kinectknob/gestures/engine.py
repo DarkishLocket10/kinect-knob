@@ -116,15 +116,21 @@ def curl_gap(hand: Hand) -> float:
 
 
 def openness(hand: Hand) -> str:
-    """'open' (>=4 fingers extended), 'fist' (<=1), else 'neutral'."""
+    """'open' (>=4 fingers extended), 'two' (index+middle only, the swipe
+    pose), 'fist' (<=1 extended), else 'neutral'. Thumb is deliberately
+    ignored throughout — people fold or splay it unpredictably."""
     wrist = hand.pts[WRIST]
-    extended = 0
+    ext = []
     for tip, pip in _FINGERS:
-        if np.linalg.norm(hand.pts[tip] - wrist) > _EXTENDED_FACTOR * np.linalg.norm(hand.pts[pip] - wrist):
-            extended += 1
-    if extended >= 4:
+        ext.append(
+            np.linalg.norm(hand.pts[tip] - wrist)
+            > _EXTENDED_FACTOR * np.linalg.norm(hand.pts[pip] - wrist)
+        )
+    if sum(ext) >= 4:
         return "open"
-    if extended <= 1:
+    if ext[0] and ext[1] and not ext[2] and not ext[3]:
+        return "two"
+    if sum(ext) <= 1:
         return "fist"
     return "neutral"
 
@@ -451,8 +457,14 @@ class GestureEngine:
         window = [(ht, hx, hy, pose) for (ht, hx, hy, pose) in self._history if t - ht <= cfg.window_s]
         if len(window) < 4:
             return []
-        # Nearly every sample in the window must be open-palm (allow one miss).
-        if sum(1 for w in window if w[3] == "open") < len(window) - 1:
+        # The swipe pose must hold through (most of) the motion. Two-finger
+        # mode is distinctive enough — an accidental match is rare — that we
+        # can tolerate 25% misclassified samples (fast motion blurs the
+        # landmarks); open-palm mode keeps the stricter allow-one-miss rule
+        # because open hands occur constantly in natural movement.
+        want = "two" if cfg.two_finger else "open"
+        needed = max(3, (3 * len(window)) // 4) if cfg.two_finger else len(window) - 1
+        if sum(1 for w in window if w[3] == want) < needed:
             return []
         duration = window[-1][0] - window[0][0]
         if duration < 0.12:
