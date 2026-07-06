@@ -19,11 +19,10 @@ over the README where they differ.
 
 ## Sharp edges
 
-- **Local-only build fixes**: until they're merged upstream, the working tree
-  carries required uncommitted changes (Dockerfile: setuptools upgrade —
-  Ubuntu 22.04's setuptools predates PEP 621 and silently builds an empty
-  package without it; plus libegl1/libgles2. Compose: KK_IR_MODE passthrough).
-  If `git pull` refuses: stash → pull → pop. Do NOT `git checkout .` them away.
+- **Build fixes live in Dockerfile on purpose** (setuptools upgrade — Ubuntu
+  22.04's setuptools predates PEP 621 and silently builds an empty package
+  without it; libegl1/libgles2 for the GPU pipeline). Upstreamed in 37d060a;
+  don't "simplify" them away.
 - `.env` is gitignored and holds the box's real config (HA entities, GPU UUID
   pin). Never commit it; never log the HA token.
 - Don't pin a `/dev/...` device path in compose and don't drop the restart
