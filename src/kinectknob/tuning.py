@@ -99,6 +99,17 @@ TUNABLES: tuple[Tunable, ...] = (
         "float", "Grip recognition", 0.45, 1.00, 0.01,
     ),
     Tunable(
+        "knob.curl_reject_gap", "Relaxed-hand rejection",
+        "Blocks a grab when the hand looks like a fist AND the middle "
+        "fingertip sits within this distance of the thumb (as a fraction of "
+        "hand size) — the signature of a hand resting in a curl, which "
+        "otherwise reads as a pinch. To calibrate: watch 'curl gap' in Live "
+        "tracking — relax your hand and note the number, then pinch "
+        "deliberately and note it again; set this slider between the two. "
+        "0 turns the check off.",
+        "float", "Grip recognition", 0.0, 0.8, 0.01,
+    ),
+    Tunable(
         "knob.engage_frames", "Grab hold time",
         "Consecutive camera frames (~33 ms each) the pinch must hold, with the "
         "hand still, before the knob engages. Higher = fewer accidental grabs, "

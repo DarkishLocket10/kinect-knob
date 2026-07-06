@@ -101,6 +101,20 @@ def pinch_ratio(hand: Hand) -> float:
     return float(np.linalg.norm(hand.pts[THUMB_TIP] - hand.pts[INDEX_TIP])) / size
 
 
+def curl_gap(hand: Hand) -> float:
+    """Thumb-tip to middle-tip distance / hand size. In a hand relaxed into a
+    curl ALL the fingertips cluster around the thumb, so this is small; in a
+    deliberate pinch the middle finger hangs back from the pinching pair, so
+    it stays large even when the other fingers are curled. This is what
+    separates 'resting hand that happens to look like a pinch' from a real
+    grip — openness() can't, because a natural pinch curls its spare fingers
+    and classifies as a fist too."""
+    size = hand.size
+    if size < 1e-6:
+        return 10.0
+    return float(np.linalg.norm(hand.pts[THUMB_TIP] - hand.pts[MIDDLE_TIP])) / size
+
+
 def openness(hand: Hand) -> str:
     """'open' (>=4 fingers extended), 'fist' (<=1), else 'neutral'."""
     wrist = hand.pts[WRIST]
@@ -120,6 +134,7 @@ class _TrackedHand:
     hand: Hand
     depth_m: Optional[float]
     pinch: float
+    curl: float
     pose: str
 
 
@@ -197,7 +212,7 @@ class GestureEngine:
             return events
 
         self._hand_last_seen = t
-        hand, pinch, pose = tracked.hand, tracked.pinch, tracked.pose
+        hand, pinch, curl, pose = tracked.hand, tracked.pinch, tracked.curl, tracked.pose
         palm = hand.palm_center
         self._history.append((t, float(palm[0]), float(palm[1]), pose))
         speed = self._palm_speed(t)
@@ -205,12 +220,13 @@ class GestureEngine:
         snap.hand_present = True
         snap.handedness = hand.handedness
         snap.pinch_ratio = round(pinch, 3)
+        snap.curl_gap = round(curl, 3)
         snap.openness = pose
         snap.palm_xy = (float(palm[0]), float(palm[1]))
         snap.palm_speed = round(speed, 3)
         snap.hand_depth_m = tracked.depth_m
 
-        events += self._update_knob(hand, pinch, pose, speed, t, snap)
+        events += self._update_knob(hand, pinch, curl, pose, speed, t, snap)
         if self.state != self.ENGAGED:
             events += self._update_swipe(t, snap)
             events += self._update_fist(pose, speed, t, snap)
@@ -238,7 +254,16 @@ class GestureEngine:
         gate = self.cfg.gate
         candidates: list[_TrackedHand] = []
         for hand in hands:
-            if hand.score < gate.min_score:
+            # Sticky confidence: MediaPipe's score routinely dips while fingers
+            # occlude each other mid-pinch. The hand we are ALREADY tracking
+            # keeps the benefit of the doubt at half the threshold; the full
+            # bar applies only to admitting a new hand (ghost filtering).
+            min_score = gate.min_score
+            if self._last_palm is not None and float(
+                np.linalg.norm(hand.palm_center - self._last_palm)
+            ) < 0.30 * self._frame_w:
+                min_score *= 0.5
+            if hand.score < min_score:
                 snap.gated_out = f"low confidence ({hand.score:.2f})"
                 continue
             if hand.size < gate.min_hand_frac * self._frame_h:
@@ -250,7 +275,9 @@ class GestureEngine:
                 if depth_m is not None and not (gate.depth_min_m <= depth_m <= gate.depth_max_m):
                     snap.gated_out = f"outside depth band ({depth_m:.2f} m)"
                     continue
-            candidates.append(_TrackedHand(hand, depth_m, pinch_ratio(hand), openness(hand)))
+            candidates.append(
+                _TrackedHand(hand, depth_m, pinch_ratio(hand), curl_gap(hand), openness(hand))
+            )
 
         if not candidates:
             # While engaged, remember where the gripping hand was so that only
@@ -305,28 +332,40 @@ class GestureEngine:
     # knob
     # ------------------------------------------------------------------
     def _update_knob(
-        self, hand: Hand, pinch: float, pose: str, speed: float, t: float, snap: EngineSnapshot
+        self, hand: Hand, pinch: float, curl: float, pose: str, speed: float,
+        t: float, snap: EngineSnapshot
     ) -> list[GestureEvent]:
         cfg = self.cfg.knob
         events: list[GestureEvent] = []
         angles = _vector_angles(hand.pts)
 
         # A relaxed/curled hand reads as a pinch too (the thumb naturally rests
-        # against the curled index), which is the classic false engage. A real
-        # knob grip keeps at least a couple of fingers un-curled, so a "fist"
-        # pose never engages — but pose is NOT re-checked while engaged, since
-        # fingers drift during a twist and release is the pinch's job.
-        deliberate = pinch < cfg.engage_pinch and speed < cfg.max_engage_speed and pose != "fist"
+        # against the curled index) — the classic false engage. But a real
+        # pinch ALSO curls its spare fingers and classifies as a "fist", so
+        # pose alone must not block. The discriminator is the curl gap: in a
+        # resting curl every fingertip clusters near the thumb; in a real
+        # pinch the middle finger hangs back. Block only when both agree.
+        # Neither is re-checked while engaged — release is the pinch's job.
+        pinch_ok = pinch < cfg.engage_pinch and speed < cfg.max_engage_speed
+        relaxed_curl = (
+            cfg.curl_reject_gap > 0 and pose == "fist" and curl < cfg.curl_reject_gap
+        )
 
         if self.state == self.IDLE:
-            if deliberate:
+            if pinch_ok and not relaxed_curl:
                 self.state = self.ENGAGING
                 self._engage_count = 1
                 self._prev_angles = angles
             return events
 
         if self.state == self.ENGAGING:
-            if deliberate:
+            if pinch_ok and relaxed_curl:
+                # Pose/curl flicker mid-debounce (fingers mid-curl during a
+                # regrip): HOLD the count rather than resetting to idle, or
+                # rapid ratchet regrips rarely survive the debounce window.
+                self._prev_angles = angles
+                return events
+            if pinch_ok:
                 self._engage_count += 1
                 self._prev_angles = angles  # warm the reference; rotation counts from grip
                 if self._engage_count >= cfg.engage_frames:

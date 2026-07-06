@@ -175,6 +175,7 @@ async function tick() {
       <tr><td>hand</td><td>${e.hand_present ? (e.handedness || 'yes') : 'none'}</td></tr>
       <tr><td>pose</td><td>${fmt(e.openness)}</td></tr>
       <tr><td>pinch ratio</td><td>${fmt(e.pinch_ratio)} <span style="color:var(--dim)">(grip &lt; ${tunables['knob.engage_pinch']?.value ?? 0.42}, release &gt; ${tunables['knob.release_pinch']?.value ?? 0.65})</span></td></tr>
+      <tr><td>curl gap</td><td>${fmt(e.curl_gap)} <span style="color:var(--dim)">(fist + gap &lt; ${tunables['knob.curl_reject_gap']?.value ?? 0.42} = resting curl, won't grab)</span></td></tr>
       <tr><td>palm speed</td><td>${fmt(e.palm_speed, ' w/s')}</td></tr>
       <tr><td>hand distance</td><td>${e.hand_depth_m ? e.hand_depth_m.toFixed(2) + ' m' : '—'}</td></tr>
       <tr><td>gated out</td><td>${fmt(e.gated_out || null)}</td></tr>

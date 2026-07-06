@@ -2,8 +2,18 @@
 import numpy as np
 
 from conftest import Timeline, make_hand
-from kinectknob.gestures.engine import GestureEngine, openness, pinch_ratio
+from kinectknob.gestures.engine import GestureEngine, curl_gap, openness, pinch_ratio
 from kinectknob.types import KnobEngage, KnobRelease, KnobTurn
+
+
+def make_natural_pinch():
+    """A REAL-WORLD pinch: thumb+index gripping, the spare fingers relaxed and
+    half-curled — which openness() classifies as a fist, but whose middle
+    fingertip hangs well back from the thumb (large curl gap)."""
+    h = make_hand(pose="pinch")
+    for tip, pip in ((12, 10), (16, 14), (20, 18)):   # middle/ring/pinky
+        h.pts[tip] = h.pts[pip] + 0.15 * (h.pts[tip] - h.pts[pip])
+    return h
 
 
 def test_pose_classifiers():
@@ -28,15 +38,74 @@ def test_open_hand_never_engages(cfg):
     assert not any(isinstance(e, KnobEngage) for e in tl.events)
 
 
-def test_fist_never_engages(cfg):
+def test_relaxed_curl_never_engages(cfg):
     # A curled hand's thumb rests against the curled index, so by pinch ratio
-    # alone it looks like a grip — the pose gate must reject it (the classic
+    # alone it looks like a grip — the curl gate must reject it (the classic
     # accidental engage: a hand relaxed on the armrest turning the volume).
     fist = make_hand(pose="fist")
-    assert pinch_ratio(fist) < cfg.knob.engage_pinch  # would engage without the gate
+    assert pinch_ratio(fist) < cfg.knob.engage_pinch     # would engage without the gate
+    assert curl_gap(fist) < cfg.knob.curl_reject_gap     # fingertips clustered
     tl = Timeline(GestureEngine(cfg))
     tl.step([fist], n=60)
     assert not any(isinstance(e, KnobEngage) for e in tl.events)
+
+
+def test_natural_pinch_with_curled_fingers_engages(cfg):
+    # Regression: the old pose-only gate blocked this outright — a deliberate
+    # pinch whose spare fingers relax into a curl classifies as a "fist", but
+    # its middle fingertip hangs back from the thumb, so the curl gap clears it.
+    h = make_natural_pinch()
+    assert openness(h) == "fist"                          # pose alone would block
+    assert curl_gap(h) > cfg.knob.curl_reject_gap         # ...but the gap says pinch
+    tl = Timeline(GestureEngine(cfg))
+    tl.step([h], n=10)
+    assert any(isinstance(e, KnobEngage) for e in tl.events)
+
+
+def test_engaging_survives_pose_flicker(cfg):
+    # Regression: mid-regrip frames flicker through fist-like poses; a single
+    # such frame used to reset the whole debounce count, making rapid
+    # pinch-release-pinch ratcheting nearly impossible.
+    tl = Timeline(GestureEngine(cfg))
+    tl.step([make_hand(pose="pinch")], n=2)               # count building...
+    tl.step([make_hand(pose="fist")], n=1)                # flicker: hold, don't reset
+    evs = tl.step([make_hand(pose="pinch")], n=4)
+    assert any(isinstance(e, KnobEngage) for e in evs), "flicker must not reset the debounce"
+
+
+def test_ratchet_regrip_full_cycle(cfg):
+    """The user's flow: pinch, turn, spread to release, rewind, pinch again,
+    turn again — the second grip must engage and accumulate fresh rotation."""
+    tl = Timeline(GestureEngine(cfg))
+    tl.step([make_hand(pose="pinch")], n=5)                       # grip 1
+    for i in range(1, 21):
+        tl.step([make_hand(pose="pinch", angle_deg=i * 2.0)])     # +40 deg
+    tl.step([make_hand(pose="release", angle_deg=40.0)], n=6)     # spread
+    assert any(isinstance(e, KnobRelease) for e in tl.events)
+    for i in range(20, -1, -4):                                   # rewind, open
+        tl.step([make_hand(pose="release", angle_deg=i * 2.0)])
+    engages_before = sum(isinstance(e, KnobEngage) for e in tl.events)
+    tl.step([make_hand(pose="pinch", angle_deg=0.0)], n=6)        # grip 2
+    assert sum(isinstance(e, KnobEngage) for e in tl.events) == engages_before + 1
+    for i in range(1, 21):
+        tl.step([make_hand(pose="pinch", angle_deg=i * 2.0)])
+    tl.step([make_hand(pose="pinch", angle_deg=40.0)], n=10)
+    turns = [e for e in tl.events if isinstance(e, KnobTurn)]
+    assert turns[-1].deg > 20, "second grip must accumulate fresh rotation"
+
+
+def test_tracked_hand_survives_confidence_dip(cfg):
+    # Regression: MediaPipe's score dips while fingers occlude each other
+    # mid-pinch; the hand we're already tracking must not be ejected.
+    tl = Timeline(GestureEngine(cfg))
+    tl.step([make_hand(pose="pinch", score=0.95)], n=6)   # engage confidently
+    assert tl.engine.state == GestureEngine.ENGAGED
+    tl.step([make_hand(pose="pinch", score=0.35)], n=30)  # dip below min_score
+    assert tl.engine.state == GestureEngine.ENGAGED, "tracked hand was ejected on a score dip"
+    # ...but a brand-new low-confidence hand is still filtered out.
+    tl2 = Timeline(GestureEngine(cfg))
+    tl2.step([make_hand(pose="pinch", score=0.35)], n=30)
+    assert not any(isinstance(e, KnobEngage) for e in tl2.events)
 
 
 def test_low_confidence_hand_ignored(cfg):

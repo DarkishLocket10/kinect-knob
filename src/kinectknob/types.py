@@ -114,6 +114,7 @@ class EngineSnapshot:
     hand_present: bool = False
     handedness: str = ""
     pinch_ratio: float = 0.0
+    curl_gap: float = 0.0               # thumb-to-middle-tip gap / hand size
     openness: str = ""                  # open | fist | neutral
     angle_deg: float = 0.0              # filtered total rotation while engaged
     palm_xy: tuple[float, float] = (0.0, 0.0)

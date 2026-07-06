@@ -65,6 +65,7 @@ class SharedState:
                     "hand_present": eng.hand_present,
                     "handedness": eng.handedness,
                     "pinch_ratio": eng.pinch_ratio,
+                    "curl_gap": eng.curl_gap,
                     "openness": eng.openness,
                     "angle_deg": eng.angle_deg,
                     "palm_speed": eng.palm_speed,

@@ -48,7 +48,8 @@ class GateConfig:
 class KnobConfig:
     engage_pinch: float = 0.42          # pinch ratio below this begins engagement
     release_pinch: float = 0.65         # pinch ratio above this releases (hysteresis)
-    engage_frames: int = 5              # ~170 ms of held pinch before engaging
+    engage_frames: int = 4              # ~130 ms of held pinch before engaging
+    curl_reject_gap: float = 0.42       # fist pose + middle tip this close to thumb = resting curl (0 = off)
     release_frames: int = 5
     full_scale_deg: float = 270.0       # degrees of rotation for 0% -> 100% volume
     deadband_deg: float = 3.0           # ignore this much wobble around the grab point
