@@ -41,13 +41,14 @@ class GateConfig:
     depth_min_m: float = 0.5
     depth_max_m: float = 3.0
     min_hand_frac: float = 0.045        # min hand size as fraction of frame height
+    min_score: float = 0.55             # ignore low-confidence (ghost) detections
 
 
 @dataclass
 class KnobConfig:
     engage_pinch: float = 0.42          # pinch ratio below this begins engagement
     release_pinch: float = 0.65         # pinch ratio above this releases (hysteresis)
-    engage_frames: int = 3
+    engage_frames: int = 5              # ~170 ms of held pinch before engaging
     release_frames: int = 5
     full_scale_deg: float = 270.0       # degrees of rotation for 0% -> 100% volume
     deadband_deg: float = 3.0           # ignore this much wobble around the grab point

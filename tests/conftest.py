@@ -31,6 +31,7 @@ def make_hand(
     angle_deg: float = 0.0,
     pose: str = "open",          # open | pinch | fist | release
     scale: float = 1.0,
+    score: float = 0.95,
 ) -> Hand:
     pts = _BASE.copy() * scale
 
@@ -61,7 +62,7 @@ def make_hand(
         pts=pts.astype(np.float32),
         z=np.zeros(21, dtype=np.float32),
         handedness="Right",
-        score=0.95,
+        score=score,
     )
 
 

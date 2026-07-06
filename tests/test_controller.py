@@ -110,6 +110,88 @@ def test_submit_delivers_events_through_the_loop():
     assert abs(ctl._sim_volume - 0.70) < 0.011
 
 
+class FakeHA:
+    """Minimal HAClient stand-in: a device whose volume steps 0.02 per
+    volume_up, or one that never reports a volume (volume=None)."""
+
+    def __init__(self, volume=None):
+        self._vol = volume
+        self.connected = True
+        self.last_error = ""
+        self.calls = []
+
+    async def call_service(self, domain, service, entity_id, data=None):
+        self.calls.append((service, data))
+        if service == "volume_up" and self._vol is not None:
+            self._vol = min(1.0, self._vol + 0.02)
+        elif service == "volume_down" and self._vol is not None:
+            self._vol = max(0.0, self._vol - 0.02)
+        return True
+
+    def volume_level(self, entity_id):
+        return self._vol
+
+    def state_updated_at(self, entity_id):
+        return None
+
+    def entity_state(self, entity_id):
+        return "playing"
+
+
+def make_ha_controller(ha, **ha_overrides) -> Controller:
+    cfg = AppConfig()
+    cfg.ha.volume_entity = "media_player.test_bose"
+    cfg.ha.media_entity = "media_player.test_spotify"
+    for k, v in ha_overrides.items():
+        setattr(cfg.ha, k, v)
+    return Controller(cfg, ha=ha)
+
+
+def test_relative_mode_never_steps_up_blind():
+    """Regression (2026-07-06): with the device volume unknown, up-detents used
+    to fire uncapped volume_up calls — how the soundbar got blasted."""
+    async def scenario():
+        ha = FakeHA(volume=None)
+        ctl = make_ha_controller(ha, max_volume=0.2)
+        await ctl._handle(KnobEngage(t=0.0))          # anchor is None -> relative
+        for i in range(1, 40):                        # a long upward twist
+            await ctl._handle(KnobTurn(t=i / 30, deg=i * 10.0, delta_deg=10.0))
+        return ha
+
+    ha = run(scenario())
+    assert not any(s == "volume_up" for s, _ in ha.calls)
+
+
+def test_relative_mode_ups_stop_at_max_volume():
+    async def scenario():
+        ha = FakeHA(volume=0.15)
+        ctl = make_ha_controller(ha, max_volume=0.2)
+        await ctl._handle(KnobEngage(t=0.0))
+        ctl._anchor = None                            # force relative mode
+        for i in range(1, 40):
+            await ctl._handle(KnobTurn(t=i / 30, deg=i * 10.0, delta_deg=10.0))
+        return ha
+
+    ha = run(scenario())
+    ups = [s for s, _ in ha.calls if s == "volume_up"]
+    # 0.15 -> 0.17 -> 0.19; the next step could overshoot the 0.2 cap: blocked.
+    assert len(ups) == 2
+    assert ha._vol <= 0.2
+
+
+def test_relative_mode_downs_always_allowed():
+    async def scenario():
+        ha = FakeHA(volume=None)                      # even blind, down is safe
+        ctl = make_ha_controller(ha, max_volume=0.2)
+        await ctl._handle(KnobEngage(t=0.0))
+        for i in range(1, 40):
+            await ctl._handle(KnobTurn(t=i / 30, deg=-i * 10.0, delta_deg=-10.0))
+        return ha
+
+    ha = run(scenario())
+    assert any(s == "volume_down" for s, _ in ha.calls)
+
+
 def test_submit_overflow_drops_quietly():
     async def scenario():
         ctl = make_controller()

@@ -28,6 +28,24 @@ def test_open_hand_never_engages(cfg):
     assert not any(isinstance(e, KnobEngage) for e in tl.events)
 
 
+def test_fist_never_engages(cfg):
+    # A curled hand's thumb rests against the curled index, so by pinch ratio
+    # alone it looks like a grip — the pose gate must reject it (the classic
+    # accidental engage: a hand relaxed on the armrest turning the volume).
+    fist = make_hand(pose="fist")
+    assert pinch_ratio(fist) < cfg.knob.engage_pinch  # would engage without the gate
+    tl = Timeline(GestureEngine(cfg))
+    tl.step([fist], n=60)
+    assert not any(isinstance(e, KnobEngage) for e in tl.events)
+
+
+def test_low_confidence_hand_ignored(cfg):
+    tl = Timeline(GestureEngine(cfg))
+    tl.step([make_hand(pose="pinch", score=0.30)], n=60)
+    assert not any(isinstance(e, KnobEngage) for e in tl.events)
+    assert "low confidence" in tl.engine.snapshot().gated_out
+
+
 def test_clockwise_turn_raises_angle(cfg):
     tl = Timeline(GestureEngine(cfg))
     tl.step([make_hand(pose="pinch")], n=5)  # engage

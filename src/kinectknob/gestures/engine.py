@@ -210,7 +210,7 @@ class GestureEngine:
         snap.palm_speed = round(speed, 3)
         snap.hand_depth_m = tracked.depth_m
 
-        events += self._update_knob(hand, pinch, speed, t, snap)
+        events += self._update_knob(hand, pinch, pose, speed, t, snap)
         if self.state != self.ENGAGED:
             events += self._update_swipe(t, snap)
             events += self._update_fist(pose, speed, t, snap)
@@ -238,6 +238,9 @@ class GestureEngine:
         gate = self.cfg.gate
         candidates: list[_TrackedHand] = []
         for hand in hands:
+            if hand.score < gate.min_score:
+                snap.gated_out = f"low confidence ({hand.score:.2f})"
+                continue
             if hand.size < gate.min_hand_frac * self._frame_h:
                 snap.gated_out = "too small / too far"
                 continue
@@ -302,21 +305,28 @@ class GestureEngine:
     # knob
     # ------------------------------------------------------------------
     def _update_knob(
-        self, hand: Hand, pinch: float, speed: float, t: float, snap: EngineSnapshot
+        self, hand: Hand, pinch: float, pose: str, speed: float, t: float, snap: EngineSnapshot
     ) -> list[GestureEvent]:
         cfg = self.cfg.knob
         events: list[GestureEvent] = []
         angles = _vector_angles(hand.pts)
 
+        # A relaxed/curled hand reads as a pinch too (the thumb naturally rests
+        # against the curled index), which is the classic false engage. A real
+        # knob grip keeps at least a couple of fingers un-curled, so a "fist"
+        # pose never engages — but pose is NOT re-checked while engaged, since
+        # fingers drift during a twist and release is the pinch's job.
+        deliberate = pinch < cfg.engage_pinch and speed < cfg.max_engage_speed and pose != "fist"
+
         if self.state == self.IDLE:
-            if pinch < cfg.engage_pinch and speed < cfg.max_engage_speed:
+            if deliberate:
                 self.state = self.ENGAGING
                 self._engage_count = 1
                 self._prev_angles = angles
             return events
 
         if self.state == self.ENGAGING:
-            if pinch < cfg.engage_pinch and speed < cfg.max_engage_speed:
+            if deliberate:
                 self._engage_count += 1
                 self._prev_angles = angles  # warm the reference; rotation counts from grip
                 if self._engage_count >= cfg.engage_frames:

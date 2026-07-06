@@ -56,6 +56,7 @@ class Controller:
         self._relative_accum = 0.0                 # degrees, for relative fallback
         self._sim_volume = 0.5                     # dry-run simulated volume
         self._next_overflow_log = 0.0
+        self._next_safety_log = 0.0
         self.events_log: deque[str] = deque(maxlen=30)
 
     # ------------------------------------------------------------------
@@ -142,11 +143,26 @@ class Controller:
             await self._call("media_player", "media_play_pause", self.cfg.ha.media_entity)
 
     async def _relative_turn(self, ev: KnobTurn) -> None:
-        """No anchor available: emit volume_up/down per detent of rotation."""
+        """No anchor available: emit volume_up/down per detent of rotation.
+
+        Up-detents are safety-gated: never step up while the volume is unknown,
+        and never past max_volume. Unlike volume_set, volume_up is uncapped on
+        the HA side — blind ups are how a knob blasts a room (2026-07-06)."""
         detent_deg = self.cfg.knob.full_scale_deg * self.cfg.ha.volume_step
         self._relative_accum += ev.delta_deg
         while self._relative_accum >= detent_deg:
             self._relative_accum -= detent_deg
+            vol = self._current_volume()
+            if vol is None:
+                now = time.monotonic()
+                if now >= self._next_safety_log:
+                    log.info("volume unknown — skipping volume_up detent (safety)")
+                    self._next_safety_log = now + 10.0
+                continue
+            # The device chooses volume_up's step size, so block any step that
+            # could overshoot: stop one configured step short of the ceiling.
+            if vol >= self.cfg.ha.max_volume - self.cfg.ha.volume_step:
+                continue
             await self._call("media_player", "volume_up", self.cfg.ha.volume_entity)
         while self._relative_accum <= -detent_deg:
             self._relative_accum += detent_deg
