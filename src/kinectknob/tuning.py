@@ -219,6 +219,12 @@ TUNABLES: tuple[Tunable, ...] = (
         "bool", "Swipe (track skip)",
     ),
     Tunable(
+        "swipe.invert", "Invert swipe direction",
+        "Flip which way means next vs previous. If swiping right skips "
+        "backwards for you, toggle this.",
+        "bool", "Swipe (track skip)",
+    ),
+    Tunable(
         "swipe.min_presence_s", "Settle time",
         "A hand must have been in frame this long before it's allowed to "
         "swipe — so a hand entering the picture never skips a track.",

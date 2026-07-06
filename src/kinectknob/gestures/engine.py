@@ -467,6 +467,8 @@ class GestureEngine:
             return []
 
         direction = (1 if dx > 0 else -1) * self._view_sign
+        if cfg.invert:
+            direction = -direction
         self._swipe_block_until = t + cfg.cooldown_s
         self._history.clear()
         snap.last_event = f"swipe {'right (next)' if direction > 0 else 'left (previous)'}"

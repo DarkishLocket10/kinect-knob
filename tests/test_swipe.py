@@ -29,6 +29,17 @@ def test_swipe_left_is_previous(cfg):
     assert swipes[0].direction == -1
 
 
+def test_swipe_invert_flips_direction(cfg):
+    cfg.swipe.invert = True
+    tl = Timeline(GestureEngine(cfg))
+    _settle(tl, x=180)
+    for i in range(1, 7):  # rightward swipe...
+        tl.step([make_hand(pose="open", center=(180 + i * 40, 300))])
+    swipes = [e for e in tl.events if isinstance(e, Swipe)]
+    assert len(swipes) == 1
+    assert swipes[0].direction == -1   # ...reads as previous when inverted
+
+
 def test_slow_drift_does_not_swipe(cfg):
     tl = Timeline(GestureEngine(cfg))
     _settle(tl, x=200)
