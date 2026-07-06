@@ -166,8 +166,8 @@ class App:
         import cv2
 
         proc_w = self.cfg.capture.proc_width
-        fps_ema = 0.0
-        proc_ema = 0.0
+        dt_ema = 0.0    # smooth the interval, then invert: EMA of 1/dt reads
+        proc_ema = 0.0  # high when frame intervals alternate (Jensen bias)
         last_t = time.monotonic()
         no_frame_since = time.monotonic()
 
@@ -203,7 +203,8 @@ class App:
             dt = now - last_t
             last_t = now
             if dt > 0:
-                fps_ema = 0.9 * fps_ema + 0.1 * (1.0 / dt) if fps_ema else 1.0 / dt
+                dt_ema = 0.9 * dt_ema + 0.1 * dt if dt_ema else dt
+            fps_ema = 1.0 / dt_ema if dt_ema else 0.0
             proc_ms = (now - t0) * 1000
             proc_ema = 0.9 * proc_ema + 0.1 * proc_ms if proc_ema else proc_ms
 
