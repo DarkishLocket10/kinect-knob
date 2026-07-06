@@ -48,6 +48,31 @@ _FRAME_TIMEOUT_S = 5.0     # no frames for this long -> declare the device stall
 _DEPTH_EVERY_N = 2         # run registration on every Nth frame, cache between
 
 
+def _fix_frame_create_leak() -> None:
+    """freenect2 0.2.3's ``Frame.create()`` wraps ``freenect2_frame_create()``
+    WITHOUT the ``ffi.gc`` destructor that device-streamed frames get, so every
+    Python-allocated frame's C++ memory is permanent. ``Registration.apply``
+    creates three such frames per call (undistorted + registered + big_depth ≈
+    10 MB), which leaked ~144 MB/s on this box until the container OOM-threatened
+    the host (2026-07-06). Re-point create() at a gc-wrapped allocation.
+    Idempotent; the binding is pinned to 0.2.3."""
+    import freenect2
+
+    if getattr(freenect2.Frame.create, "_kk_leakfix", False):
+        return
+    ffi, lib = freenect2.ffi, freenect2.lib
+
+    def create(cls, width, height, bytes_per_pixel):
+        return cls(ffi.gc(
+            lib.freenect2_frame_create(width, height, bytes_per_pixel),
+            lib.freenect2_frame_dispose,
+        ))
+
+    create._kk_leakfix = True
+    freenect2.Frame.create = classmethod(create)
+    log.info("patched freenect2.Frame.create with gc-managed allocation (leak fix)")
+
+
 class KinectV2Capture(CaptureBase):
     name = "kinect2"
     has_depth = True
@@ -64,6 +89,7 @@ class KinectV2Capture(CaptureBase):
             ) from exc
         from freenect2 import Device, FrameType, NoFrameReceivedError
 
+        _fix_frame_create_leak()
         self._Device = Device
         self._FrameType = FrameType
         self._NoFrame = NoFrameReceivedError
