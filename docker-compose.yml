@@ -27,6 +27,8 @@ services:
       # Whole-bus mount (NOT a single device node): the Kinect re-enumerates
       # on driver init and after stalls, which breaks pinned device paths.
       - /dev/bus/usb:/dev/bus/usb
+      # Dashboard tuning overrides persist here (tuning.json) across restarts.
+      - ./data:/app/data
       # Optional deep tuning: copy config.example.yaml to config.yaml, edit,
       # then uncomment this line AND set KK_CONFIG=/app/config.yaml in .env.
       # - ./config.yaml:/app/config.yaml:ro

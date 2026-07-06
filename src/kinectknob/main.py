@@ -30,6 +30,7 @@ from .controller import Controller
 from .gestures.engine import GestureEngine
 from .ha.client import HAClient
 from .state import SharedState
+from .tuning import Tuning
 from .types import Frame
 
 log = logging.getLogger("kk.main")
@@ -78,6 +79,8 @@ class App:
         else:
             log.warning("KK_HA_URL / KK_HA_TOKEN not set — running in dry-run mode")
         self.controller = Controller(cfg, self.ha)
+        # Applies any saved dashboard-tuning overrides onto cfg immediately.
+        self.tuning = Tuning(cfg)
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     # ------------------------------------------------------------------
@@ -232,7 +235,7 @@ class App:
 
         from .web.server import create_app
 
-        web_app = create_app(self.cfg, self.shared, self.controller)
+        web_app = create_app(self.cfg, self.shared, self.controller, self.tuning)
         server = uvicorn.Server(
             uvicorn.Config(
                 web_app,

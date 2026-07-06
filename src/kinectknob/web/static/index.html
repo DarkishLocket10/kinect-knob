@@ -36,6 +36,39 @@
   #stream { width: 100%; border-radius: 8px; display: none; margin-top: 10px; }
   .statebar { font-size: 26px; font-weight: 600; }
   .state-idle { color: var(--dim); } .state-engaging { color: var(--amber); } .state-engaged { color: var(--green); }
+
+  /* ---- tuning panel ---- */
+  #tuningCard { margin-top: 16px; }
+  .tune-note { color: var(--dim); font-size: 12px; margin: -6px 0 10px; }
+  details.tgroup { border: 1px solid var(--edge); border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
+  details.tgroup summary { cursor: pointer; padding: 10px 14px; font-size: 13px; font-weight: 600;
+                           background: #1a212c; list-style: none; display: flex; align-items: center; gap: 8px; }
+  details.tgroup summary::before { content: '▸'; color: var(--dim); transition: transform .15s; }
+  details.tgroup[open] summary::before { transform: rotate(90deg); }
+  .tcount { margin-left: auto; color: var(--dim); font-weight: 400; font-size: 12px; }
+  .tcount .mod { color: var(--amber); }
+  .tune { padding: 12px 14px; border-top: 1px solid var(--edge); }
+  .tune-head { display: flex; align-items: center; gap: 8px; }
+  .tune-label { font-size: 13px; font-weight: 600; }
+  .tune-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); display: none; }
+  .tune.changed .tune-dot { display: inline-block; }
+  .tune-val { margin-left: auto; font: 600 13px ui-monospace, Consolas, monospace; color: var(--blue);
+              min-width: 84px; text-align: right; transition: color .4s; }
+  .tune-val.flash { color: var(--green); transition: none; }
+  .tune-reset { border: none; background: none; color: var(--dim); cursor: pointer; padding: 0 4px;
+                font-size: 14px; visibility: hidden; }
+  .tune.changed .tune-reset { visibility: visible; }
+  .tune-reset:hover { color: var(--amber); border: none; }
+  .tune input[type=range] { width: 100%; margin: 8px 0 4px; accent-color: var(--blue); }
+  .tune.changed input[type=range] { accent-color: var(--amber); }
+  .tune-help { color: var(--dim); font-size: 12px; line-height: 1.45; }
+  .tune-minmax { display: flex; justify-content: space-between; color: #4d5a6a; font-size: 11px; }
+  .toggle { margin-left: 0; margin-top: 8px; margin-bottom: 4px; width: 40px; height: 22px; appearance: none;
+            background: #1d2530; border: 1px solid var(--edge); border-radius: 999px; position: relative; cursor: pointer; }
+  .toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+                   border-radius: 50%; background: var(--dim); transition: all .15s; }
+  .toggle:checked { background: #14351f; border-color: var(--green); }
+  .toggle:checked::after { left: 20px; background: var(--green); }
 </style>
 </head>
 <body>
@@ -78,6 +111,17 @@
         <div id="log"></div>
       </div>
     </div>
+  </div>
+
+  <div class="card" id="tuningCard">
+    <h2 style="display:flex;align-items:center">Tuning
+      <button style="margin-left:auto;font-size:12px" onclick="resetTuning()">Reset all to defaults</button>
+    </h2>
+    <div class="tune-note">Drag a slider and let go — changes apply <b>instantly</b> to the running
+      gestures and are saved automatically (they survive restarts). Amber dot = changed from default;
+      click ↺ on a row to undo just that one. Watch the numbers in <i>Live tracking</i> above
+      (pinch ratio, palm speed, hand distance) to see what your hand actually measures while you tune.</div>
+    <div id="tuning"><span style="color:var(--dim)">loading…</span></div>
   </div>
 </div>
 
@@ -130,7 +174,7 @@ async function tick() {
     $('stats').innerHTML = `
       <tr><td>hand</td><td>${e.hand_present ? (e.handedness || 'yes') : 'none'}</td></tr>
       <tr><td>pose</td><td>${fmt(e.openness)}</td></tr>
-      <tr><td>pinch ratio</td><td>${fmt(e.pinch_ratio)} <span style="color:var(--dim)">(grip &lt; 0.42, release &gt; 0.65)</span></td></tr>
+      <tr><td>pinch ratio</td><td>${fmt(e.pinch_ratio)} <span style="color:var(--dim)">(grip &lt; ${tunables['knob.engage_pinch']?.value ?? 0.42}, release &gt; ${tunables['knob.release_pinch']?.value ?? 0.65})</span></td></tr>
       <tr><td>palm speed</td><td>${fmt(e.palm_speed, ' w/s')}</td></tr>
       <tr><td>hand distance</td><td>${e.hand_depth_m ? e.hand_depth_m.toFixed(2) + ' m' : '—'}</td></tr>
       <tr><td>gated out</td><td>${fmt(e.gated_out || null)}</td></tr>
@@ -143,6 +187,93 @@ async function tick() {
 }
 setInterval(tick, 200);
 tick();
+
+/* ---------------- tuning panel ---------------- */
+let tunables = {};          // key -> spec (with .value/.default), from the server
+let openGroups = null;      // remember which sections the user expanded
+
+// Values stored as 0-1 fractions but shown as percentages.
+const PCT = new Set(['ha.max_volume', 'ha.volume_step']);
+
+function fmtVal(t, v) {
+  if (t.kind === 'bool') return v ? 'on' : 'off';
+  if (PCT.has(t.key)) return Math.round(v * 100) + '%';
+  const dec = t.step >= 1 ? 0 : (String(t.step).split('.')[1] || '').length;
+  return (+v).toFixed(dec) + (t.unit && t.unit !== '%' ? ' ' + t.unit : '');
+}
+
+async function loadTuning() {
+  const r = await fetch('/api/tuning');
+  if (!r.ok) { $('tuning').innerHTML = '<span style="color:var(--dim)">tuning unavailable</span>'; return; }
+  const list = (await r.json()).tunables;
+  tunables = Object.fromEntries(list.map(t => [t.key, t]));
+  renderTuning(list);
+}
+
+function renderTuning(list) {
+  if (openGroups === null) {
+    openGroups = new Set([list[0]?.group]);            // first group open by default
+  } else {
+    openGroups = new Set([...document.querySelectorAll('details.tgroup[open]')]
+                         .map(d => d.dataset.group));
+  }
+  const groups = [...new Set(list.map(t => t.group))];
+  $('tuning').innerHTML = groups.map(g => {
+    const items = list.filter(t => t.group === g);
+    const changed = items.filter(t => t.value !== t.default).length;
+    return `<details class="tgroup" data-group="${g}" ${openGroups.has(g) ? 'open' : ''}>
+      <summary>${g}<span class="tcount">${changed ? `<span class="mod">${changed} changed</span> · ` : ''}${items.length} settings</span></summary>
+      ${items.map(rowHtml).join('')}
+    </details>`;
+  }).join('');
+}
+
+function rowHtml(t) {
+  const id = t.key.replace('.', '__');
+  const changed = t.value !== t.default ? 'changed' : '';
+  const control = t.kind === 'bool'
+    ? `<input type="checkbox" class="toggle" id="in_${id}" ${t.value ? 'checked' : ''}
+         onchange="applyTune('${t.key}', this.checked)">`
+    : `<input type="range" id="in_${id}" min="${t.min}" max="${t.max}" step="${t.step}" value="${t.value}"
+         oninput="$('val_${id}').textContent = fmtVal(tunables['${t.key}'], +this.value)"
+         onchange="applyTune('${t.key}', +this.value)">
+       <div class="tune-minmax"><span>${fmtVal(t, t.min)}</span><span>${fmtVal(t, t.max)}</span></div>`;
+  return `<div class="tune ${changed}" id="row_${id}">
+    <div class="tune-head">
+      <span class="tune-dot"></span>
+      <span class="tune-label">${t.label}</span>
+      <span class="tune-val" id="val_${id}">${fmtVal(t, t.value)}</span>
+      <button class="tune-reset" title="reset to default (${fmtVal(t, t.default)})"
+              onclick="applyTune('${t.key}', ${JSON.stringify(t.default)})">↺</button>
+    </div>
+    ${control}
+    <div class="tune-help">${t.help}</div>
+  </div>`;
+}
+
+async function applyTune(key, value) {
+  const r = await fetch('/api/tuning', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({key, value}),
+  });
+  if (r.ok) {
+    const id = key.replace('.', '__');
+    const el = $('val_' + id);
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 400);
+  }
+  // Re-fetch: the server may have clamped the value or nudged a paired
+  // threshold (engage/release, near/far), so redraw everything from truth.
+  await loadTuning();
+}
+
+async function resetTuning() {
+  if (!confirm('Reset ALL tuning back to defaults?')) return;
+  await fetch('/api/tuning/reset', {method: 'POST'});
+  await loadTuning();
+}
+
+loadTuning();
 </script>
 </body>
 </html>

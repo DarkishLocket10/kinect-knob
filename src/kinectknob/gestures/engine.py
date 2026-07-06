@@ -335,7 +335,9 @@ class GestureEngine:
                     self._accum_deg = 0.0
                     self._effective_deg = 0.0
                     self._last_emitted_deg = 0.0
-                    self._filter.reset()
+                    # Rebuilt (not just reset) so live-tuned smoothing params
+                    # take effect on the next grip without a restart.
+                    self._filter = OneEuroFilter(cfg.filter_min_cutoff, cfg.filter_beta)
                     self._filter(t, 0.0)
                     events.append(KnobEngage(t=t))
                     snap.last_event = "knob engaged"

@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from ..config import AppConfig
 from ..controller import Controller
 from ..state import SharedState
+from ..tuning import Tuning
 from .. import debugdraw
 
 log = logging.getLogger("kk.web")
@@ -30,7 +31,17 @@ class ActionRequest(BaseModel):
     action: str
 
 
-def create_app(cfg: AppConfig, shared: SharedState, controller: Controller) -> FastAPI:
+class TuningRequest(BaseModel):
+    key: str
+    value: bool | float
+
+
+def create_app(
+    cfg: AppConfig,
+    shared: SharedState,
+    controller: Controller,
+    tuning: Tuning | None = None,
+) -> FastAPI:
     app = FastAPI(title="kinect-knob", docs_url=None, redoc_url=None)
 
     @app.get("/")
@@ -54,6 +65,29 @@ def create_app(cfg: AppConfig, shared: SharedState, controller: Controller) -> F
     async def action(req: ActionRequest):
         ok = await controller.manual(req.action)
         return {"ok": ok}
+
+    @app.get("/api/tuning")
+    async def tuning_get():
+        if tuning is None:
+            return JSONResponse({"error": "tuning unavailable"}, status_code=404)
+        return {"tunables": tuning.schema()}
+
+    @app.post("/api/tuning")
+    async def tuning_set(req: TuningRequest):
+        if tuning is None:
+            return JSONResponse({"error": "tuning unavailable"}, status_code=404)
+        try:
+            applied = tuning.set_value(req.key, req.value)
+        except KeyError:
+            return JSONResponse({"error": f"unknown key {req.key!r}"}, status_code=400)
+        return {"key": req.key, "value": applied}
+
+    @app.post("/api/tuning/reset")
+    async def tuning_reset():
+        if tuning is None:
+            return JSONResponse({"error": "tuning unavailable"}, status_code=404)
+        tuning.reset()
+        return {"ok": True}
 
     @app.get("/debug/stream")
     async def debug_stream():
