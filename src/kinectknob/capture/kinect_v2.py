@@ -181,6 +181,11 @@ class KinectV2Capture(CaptureBase):
             fullres = cv2.cvtColor(
                 raw, cv2.COLOR_RGBA2BGR if fmt_early == "RGBX" else cv2.COLOR_BGRA2BGR
             )
+            # libfreenect2 delivers the color stream horizontally MIRRORED
+            # (verified against scene text). Flip to true orientation so
+            # writing in the scene is readable — the whiteboard reader and
+            # its left/right board semantics depend on this.
+            fullres = cv2.flip(fullres, 1)
 
         # Downscale the 4-channel frame FIRST, then color-convert the small
         # result — same output, ~5x less pixel work than converting at 1080p.
