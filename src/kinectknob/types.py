@@ -35,6 +35,10 @@ class Frame:
     t: float          # time.monotonic() at capture
     seq: int
     ir: bool = False
+    # Full-resolution BGR frame, populated ~once per second (not every frame).
+    # UNMIRRORED — true scene orientation, so text in the scene stays readable
+    # (the whiteboard reader depends on this). None on most frames.
+    fullres: Optional[np.ndarray] = None
 
 
 @dataclass

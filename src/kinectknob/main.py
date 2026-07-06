@@ -154,6 +154,9 @@ class App:
                     frame.rgb = cv2.flip(frame.rgb, 1)
                     if frame.depth_mm is not None:
                         frame.depth_mm = cv2.flip(frame.depth_mm, 1)
+                if frame.fullres is not None:
+                    # Deliberately NOT mirrored — see Frame.fullres.
+                    self.shared.update_fullres(frame.fullres)
                 self.slot.put(frame)
         except CaptureError as exc:
             log.critical("capture device failed: %s", exc)

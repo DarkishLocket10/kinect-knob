@@ -23,6 +23,8 @@ class SharedState:
         self.ir_active: bool = False
         self.started_at: float = time.time()
         self.last_frame_t: float = 0.0                  # monotonic
+        self._fullres: Optional[np.ndarray] = None      # unmirrored BGR 1080p
+        self._fullres_t: float = 0.0
 
     def update_vision(
         self,
@@ -41,6 +43,16 @@ class SharedState:
             self.proc_ms = proc_ms
             self.ir_active = ir
             self.last_frame_t = time.monotonic()
+
+    def update_fullres(self, bgr: np.ndarray) -> None:
+        with self._lock:
+            self._fullres = bgr
+            self._fullres_t = time.monotonic()
+
+    def fullres(self) -> tuple[Optional[np.ndarray], float]:
+        """Latest full-resolution UNMIRRORED BGR frame and its capture time."""
+        with self._lock:
+            return self._fullres, self._fullres_t
 
     def render_data(self) -> tuple[Optional[np.ndarray], list[Hand], EngineSnapshot]:
         with self._lock:

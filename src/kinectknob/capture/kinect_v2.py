@@ -172,6 +172,16 @@ class KinectV2Capture(CaptureBase):
                 )
             if use_ir:
                 return self._ir_frame(ir, depth, t)
+        # Stash a full-res copy about once a second for the snapshot endpoint /
+        # whiteboard reader (~6 MB convert+copy per second — negligible). Kept
+        # unmirrored so scene text reads correctly.
+        fullres = None
+        if self._seq % 30 == 0:
+            fmt_early = getattr(getattr(color, "format", None), "name", "")
+            fullres = cv2.cvtColor(
+                raw, cv2.COLOR_RGBA2BGR if fmt_early == "RGBX" else cv2.COLOR_BGRA2BGR
+            )
+
         # Downscale the 4-channel frame FIRST, then color-convert the small
         # result — same output, ~5x less pixel work than converting at 1080p.
         target_w = self.cfg.proc_width
@@ -202,7 +212,7 @@ class KinectV2Capture(CaptureBase):
                 log.debug("registration failed for a frame", exc_info=True)
 
         self._seq += 1
-        return Frame(rgb=rgb, depth_mm=self._depth_cache, t=t, seq=self._seq)
+        return Frame(rgb=rgb, depth_mm=self._depth_cache, t=t, seq=self._seq, fullres=fullres)
 
     def _ir_frame(self, ir, depth, t: float) -> Frame:
         """Night mode: track on the tone-mapped IR image. IR and depth come off

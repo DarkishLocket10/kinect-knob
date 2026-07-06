@@ -89,6 +89,20 @@ def create_app(
         tuning.reset()
         return {"ok": True}
 
+    @app.get("/api/snapshot")
+    async def snapshot():
+        """Latest full-resolution UNMIRRORED frame as JPEG (~1s old at most).
+        This is what the whiteboard reader consumes — the normal pipeline only
+        keeps a downscaled copy, far too small for handwriting."""
+        bgr, ts = shared.fullres()
+        if bgr is None:
+            return JSONResponse({"error": "no full-res frame yet"}, status_code=404)
+        loop = asyncio.get_running_loop()
+        jpg = await loop.run_in_executor(None, _encode_jpeg, bgr)
+        if jpg is None:
+            return JSONResponse({"error": "encode failed"}, status_code=500)
+        return Response(jpg, media_type="image/jpeg")
+
     @app.get("/debug/stream")
     async def debug_stream():
         if not cfg.web.debug_stream:
@@ -120,4 +134,9 @@ def create_app(
 def _render_jpeg(rgb, hands, snap, volume) -> bytes | None:
     bgr = debugdraw.render(rgb, hands, snap, volume)
     ok, buf = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+    return buf.tobytes() if ok else None
+
+
+def _encode_jpeg(bgr) -> bytes | None:
+    ok, buf = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
     return buf.tobytes() if ok else None
