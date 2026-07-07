@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 
@@ -25,6 +25,9 @@ class SharedState:
         self.last_frame_t: float = 0.0                  # monotonic
         self._fullres: Optional[np.ndarray] = None      # unmirrored BGR 1080p
         self._fullres_t: float = 0.0
+        # Backend hook for stacked "proper photos" (capture_photo); set once
+        # by main before the threads start, called from the web executor.
+        self.photo_fn: Optional[Callable[[int, float], Optional[np.ndarray]]] = None
 
     def update_vision(
         self,

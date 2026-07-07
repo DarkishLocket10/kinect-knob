@@ -263,27 +263,48 @@ TUNABLES: tuple[Tunable, ...] = (
         "Minimum time between swipes, so one gesture can't double-skip.",
         "float", "Swipe (track skip)", 0.2, 3.0, 0.1, "s",
     ),
-    # ------------------------------------------------ fist hold
+    # ------------------------------------------------ play/pause hold
     Tunable(
-        "fist.enabled", "Fist hold enabled",
-        "Hold a closed fist still to toggle play/pause.",
-        "bool", "Fist hold (play/pause)",
+        "playpause.enabled", "Play/pause enabled",
+        "Hold the pose still to toggle play/pause. The pose is an open palm "
+        "facing the camera (or a closed fist via KK_PLAYPAUSE_POSE=fist).",
+        "bool", "Play/pause hold",
     ),
     Tunable(
-        "fist.hold_s", "Hold duration",
-        "How long the fist must be held still before play/pause fires.",
-        "float", "Fist hold (play/pause)", 0.2, 3.0, 0.1, "s",
+        "playpause.require_facing", "Palm must face the camera",
+        "On: the open palm only counts when it actually faces the lens — the "
+        "back of the hand or a sideways hand never toggles playback. Only "
+        "applies to the palm pose.",
+        "bool", "Play/pause hold",
     ),
     Tunable(
-        "fist.cooldown_s", "Cooldown",
-        "Minimum time between fist-hold triggers.",
-        "float", "Fist hold (play/pause)", 0.5, 5.0, 0.1, "s",
+        "playpause.facing_min", "Facing strictness",
+        "How squarely the palm must face the camera. A flat palm scores "
+        "about 0.8, edge-on about 0. Raise this if playback still toggles "
+        "on half-turned hands; lower it if you have to pose too precisely.",
+        "float", "Play/pause hold", 0.05, 0.7, 0.05, "",
     ),
     Tunable(
-        "fist.max_speed_frac", "Max speed while holding",
-        "The fist must stay slower than this (frame-widths/s) for the whole "
-        "hold — a moving fist is just a moving hand.",
-        "float", "Fist hold (play/pause)", 0.05, 1.0, 0.05, "w/s",
+        "playpause.hold_s", "Hold duration",
+        "How long the pose must be held still before play/pause fires.",
+        "float", "Play/pause hold", 0.2, 3.0, 0.1, "s",
+    ),
+    Tunable(
+        "playpause.cooldown_s", "Cooldown",
+        "Minimum time between play/pause triggers.",
+        "float", "Play/pause hold", 0.5, 5.0, 0.1, "s",
+    ),
+    Tunable(
+        "playpause.max_speed_frac", "Max speed while holding",
+        "The hand must stay slower than this (frame-widths/s) for the whole "
+        "hold — a hand in motion is just a hand in motion.",
+        "float", "Play/pause hold", 0.05, 1.0, 0.05, "w/s",
+    ),
+    Tunable(
+        "playpause.min_presence_s", "Min presence before hold",
+        "The hand must have been in frame this long before a hold counts, so "
+        "raising your hand into view never instantly toggles playback.",
+        "float", "Play/pause hold", 0.0, 2.0, 0.05, "s",
     ),
 )
 

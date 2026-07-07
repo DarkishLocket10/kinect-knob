@@ -76,11 +76,15 @@ class SwipeConfig:
 
 
 @dataclass
-class FistConfig:
-    enabled: bool = False               # play/pause on fist-hold (opt-in)
-    hold_s: float = 0.7
-    max_speed_frac: float = 0.25
+class PlayPauseConfig:
+    enabled: bool = True
+    pose: str = "palm"                  # "palm" (open palm facing the camera) | "fist"
+    require_facing: bool = True         # palm pose must actually face the camera
+    facing_min: float = 0.3             # min palm-facing score (see palm_facing_score)
+    hold_s: float = 0.7                 # pose must hold still this long
+    max_speed_frac: float = 0.25        # palm speed ceiling during the hold (widths/s)
     cooldown_s: float = 2.0
+    min_presence_s: float = 0.5         # hand must be in frame this long first
 
 
 @dataclass
@@ -97,7 +101,7 @@ class AppConfig:
     gate: GateConfig = field(default_factory=GateConfig)
     knob: KnobConfig = field(default_factory=KnobConfig)
     swipe: SwipeConfig = field(default_factory=SwipeConfig)
-    fist: FistConfig = field(default_factory=FistConfig)
+    playpause: PlayPauseConfig = field(default_factory=PlayPauseConfig)
     web: WebConfig = field(default_factory=WebConfig)
     model_path: str = "models/hand_landmarker.task"
     num_hands: int = 2
@@ -128,7 +132,8 @@ _ENV_MAP: dict[str, tuple[str, str, str]] = {
     "KK_SWIPE_ENABLED": ("swipe", "enabled", "bool"),
     "KK_SWIPE_TWO_FINGER": ("swipe", "two_finger", "bool"),
     "KK_INVERT_SWIPE": ("swipe", "invert", "bool"),
-    "KK_PLAYPAUSE_ENABLED": ("fist", "enabled", "bool"),
+    "KK_PLAYPAUSE_ENABLED": ("playpause", "enabled", "bool"),
+    "KK_PLAYPAUSE_POSE": ("playpause", "pose", "str"),
     "KK_PORT": ("web", "port", "int"),
     "KK_DEBUG_STREAM": ("web", "debug_stream", "bool"),
     "KK_MODEL_PATH": ("", "model_path", "str"),
@@ -191,6 +196,9 @@ def load_config(path: Optional[str] = None) -> AppConfig:
     cfg.capture.ir_mode = cfg.capture.ir_mode.strip().lower()
     if cfg.capture.ir_mode not in ("auto", "off", "always"):
         raise ValueError(f"capture.ir_mode must be auto|off|always, got {cfg.capture.ir_mode!r}")
+    cfg.playpause.pose = cfg.playpause.pose.strip().lower()
+    if cfg.playpause.pose not in ("palm", "fist"):
+        raise ValueError(f"playpause.pose must be palm|fist, got {cfg.playpause.pose!r}")
     cfg.mp_delegate = cfg.mp_delegate.strip().lower()
     if cfg.mp_delegate not in ("cpu", "gpu"):
         raise ValueError(f"mp_delegate must be cpu|gpu, got {cfg.mp_delegate!r}")

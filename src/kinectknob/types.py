@@ -106,8 +106,11 @@ class Swipe(GestureEvent):
 
 
 @dataclass
-class FistHold(GestureEvent):
-    """Closed fist held still: play/pause toggle (optional, off by default)."""
+class PlayPauseHold(GestureEvent):
+    """Play/pause toggle: a pose held still for a beat. ``pose`` is what was
+    held — "palm" (open palm facing the camera, the default) or "fist"."""
+
+    pose: str = "palm"
 
 
 @dataclass

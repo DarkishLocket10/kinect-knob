@@ -7,8 +7,10 @@ over the README where they differ.
 
 ## The change → deploy loop
 
-1. Make the change; keep `pytest` green (`docker run --rm -v $PWD:/w -w /w
-   kinect-knob:local python3 -m pytest -q` runs the suite in the app image).
+1. Make the change; keep `pytest` green (`docker run --rm --entrypoint sh
+   -v $PWD:/w -w /w kinect-knob:local -c "pip install -q pytest; python3 -m
+   pytest -q"` runs the suite in the app image — the image's entrypoint is
+   the app CLI, so it must be overridden, and pytest isn't preinstalled).
 2. Commit and push (origin is the SSH form of the GitHub repo; the server's
    key must be registered on the account).
 3. Redeploy: `docker compose up -d --build` — layer cache makes app-only
@@ -16,6 +18,19 @@ over the README where they differ.
 4. Verify per runbook §4: `docker logs kinect-knob` (expect kinect2 +
    OpenCL pipeline lines), `curl -s localhost:8420/api/state` (fps ≈ 30,
    `backend: kinect2`, `has_depth: true`).
+
+## Whiteboard-sync integration
+
+- `GET /api/snapshot` serves whiteboard-sync (port 8430). `frames=N` (2-32)
+  stacks N consecutive color frames into a denoised "proper photo" via
+  `capture_photo()` on the kinect2 backend (the freenect2 binding exposes NO
+  exposure/gain control, so temporal stacking is the only real quality lever);
+  `format=png` returns lossless PNG. Without params it's the old cached
+  ~1s-stale JPEG. `X-Snapshot-Mode` header says which path served the request.
+- Play/pause is a held OPEN PALM FACING the camera (`playpause.*` config,
+  `palm_facing_score` in the engine); `KK_PLAYPAUSE_POSE=fist` restores the
+  old fist trigger. Old `fist.*` keys in `data/tuning.json` are ignored after
+  this rename (deliberate — they were tuned for the fist pose).
 
 ## Sharp edges
 

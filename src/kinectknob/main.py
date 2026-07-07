@@ -98,6 +98,8 @@ class App:
             return EXIT_CAPTURE_FAILURE
         self.shared.backend = capture.name
         self.shared.has_depth = capture.has_depth
+        # Kinect v2 can stack N consecutive frames into a "proper photo".
+        self.shared.photo_fn = getattr(capture, "capture_photo", None)
 
         tracker = HandTracker(self.cfg.model_path, self.cfg.num_hands, self.cfg.mp_delegate)
         engine = GestureEngine(self.cfg)

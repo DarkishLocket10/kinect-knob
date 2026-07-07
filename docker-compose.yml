@@ -52,7 +52,8 @@ services:
       # -- Gestures -----------------------------------------------------------
       - KK_SWIPE_ENABLED=${KK_SWIPE_ENABLED:-true}
       - KK_INVERT_SWIPE=${KK_INVERT_SWIPE:-false}
-      - KK_PLAYPAUSE_ENABLED=${KK_PLAYPAUSE_ENABLED:-false}
+      - KK_PLAYPAUSE_ENABLED=${KK_PLAYPAUSE_ENABLED:-true}
+      - KK_PLAYPAUSE_POSE=${KK_PLAYPAUSE_POSE:-palm}
       - KK_FULL_SCALE_DEG=${KK_FULL_SCALE_DEG:-270}
       - KK_INVERT_ROTATION=${KK_INVERT_ROTATION:-false}
       - KK_CONFIG=${KK_CONFIG:-}

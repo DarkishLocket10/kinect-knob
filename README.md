@@ -124,7 +124,12 @@ then `python -m pytest tests` (any Python ≥3.10 — no Kinect/mediapipe needed
 | release pinch, wind back, pinch again | ratchet — keep turning past wrist range |
 | **Open palm, swipe right** | next track |
 | **Open palm, swipe left** | previous track |
-| Closed fist, hold 0.7 s *(off by default: `KK_PLAYPAUSE_ENABLED=true`)* | play/pause |
+| **Open palm facing the camera, hold 0.7 s** | play/pause |
+
+Play/pause only counts when the palm actually FACES the lens (a handedness-aware
+cross-product check) — the back of a raised hand, an edge-on palm, or a hand
+waving past never toggles playback. `KK_PLAYPAUSE_POSE=fist` restores the old
+closed-fist trigger; `KK_PLAYPAUSE_ENABLED=false` turns it off.
 
 Anti-misfire measures baked in: pinch must hold ~100 ms to engage (with
 hysteresis to release); a 3° deadband means grabbing never nudges the volume;
@@ -181,7 +186,7 @@ while adjusting — they're exactly what the engine sees.
 src/kinectknob/
   capture/        webcam / kinect_v1 (libfreenect) / kinect_v2 (freenect2) + auto-detect
   tracking/       MediaPipe HandLandmarker wrapper (VIDEO mode, CPU)
-  gestures/       the knob/swipe/fist state machine (pure numpy, fully unit-tested)
+  gestures/       the knob/swipe/play-pause state machine (pure numpy, fully unit-tested)
   ha/             Home Assistant WebSocket client (persistent, auto-reconnect)
   controller.py   gesture events → coalesced volume_set / track skip
   web/            FastAPI status UI + MJPEG debug stream

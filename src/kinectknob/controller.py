@@ -14,7 +14,7 @@ Volume strategy (the part that makes the knob feel like hardware):
 * If HA doesn't know the volume (entity unavailable), we degrade to relative
   ``volume_up``/``volume_down`` detents so the knob still works.
 
-Transport events (swipe/fist) are fired immediately, never queued behind
+Transport events (swipe/play-pause) are fired immediately, never queued behind
 volume traffic.
 
 With no HA configured the controller runs in **dry-run**: everything works
@@ -30,7 +30,7 @@ from typing import Optional
 
 from .config import AppConfig
 from .ha.client import HAClient
-from .types import FistHold, GestureEvent, KnobEngage, KnobRelease, KnobTurn, Swipe
+from .types import GestureEvent, KnobEngage, KnobRelease, KnobTurn, PlayPauseHold, Swipe
 
 log = logging.getLogger("kk.ctl")
 
@@ -137,7 +137,7 @@ class Controller:
             self._log_event("next track" if ev.direction > 0 else "previous track")
             await self._call("media_player", service, self.cfg.ha.media_entity)
 
-        elif isinstance(ev, FistHold):
+        elif isinstance(ev, PlayPauseHold):
             self._log_event("play/pause")
             await self._call("media_player", "media_play_pause", self.cfg.ha.media_entity)
 

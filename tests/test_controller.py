@@ -3,7 +3,7 @@ import asyncio
 
 from kinectknob.config import AppConfig
 from kinectknob.controller import Controller
-from kinectknob.types import FistHold, KnobEngage, KnobRelease, KnobTurn, Swipe
+from kinectknob.types import KnobEngage, KnobRelease, KnobTurn, PlayPauseHold, Swipe
 
 
 def run(coro):
@@ -62,12 +62,12 @@ def test_quantised_to_bose_steps():
     assert ctl._sim_volume == 0.50  # sub-step turn is a quantised no-op
 
 
-def test_swipe_and_fist_do_not_crash_without_entities():
+def test_swipe_and_playpause_do_not_crash_without_entities():
     async def scenario():
         ctl = make_controller()
         await ctl._handle(Swipe(t=0.0, direction=1, speed=1.5))
         await ctl._handle(Swipe(t=1.0, direction=-1, speed=1.5))
-        await ctl._handle(FistHold(t=2.0))
+        await ctl._handle(PlayPauseHold(t=2.0))
         return ctl
 
     ctl = run(scenario())

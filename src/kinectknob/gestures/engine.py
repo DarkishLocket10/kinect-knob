@@ -1,4 +1,4 @@
-"""The gesture engine: turns hand landmarks into knob / swipe / fist events.
+"""The gesture engine: turns hand landmarks into knob / swipe / play-pause events.
 
 Design notes
 ------------
@@ -57,12 +57,12 @@ from ..types import (
     WRIST,
     DepthSampler,
     EngineSnapshot,
-    FistHold,
     GestureEvent,
     Hand,
     KnobEngage,
     KnobRelease,
     KnobTurn,
+    PlayPauseHold,
     Swipe,
 )
 
@@ -135,6 +135,22 @@ def openness(hand: Hand) -> str:
     return "neutral"
 
 
+def palm_facing_score(hand: Hand) -> float:
+    """How much the palm faces the camera: ~+0.8 for a flat palm toward the
+    lens, ~-0.8 for the back of the hand, ~0 edge-on. The 2D cross product of
+    wrist->index-MCP x wrist->pinky-MCP, normalised by hand size squared, with
+    the sign folded through MediaPipe handedness. View-mirroring flips both
+    the cross product and the reported handedness, so the score is invariant
+    to whether the feed is mirrored."""
+    size = hand.size
+    if size < 1e-6:
+        return 0.0
+    a = hand.pts[INDEX_MCP] - hand.pts[WRIST]
+    b = hand.pts[PINKY_MCP] - hand.pts[WRIST]
+    cross = float(a[0] * b[1] - a[1] * b[0])
+    return (cross if hand.handedness == "Right" else -cross) / (size * size)
+
+
 @dataclass
 class _TrackedHand:
     hand: Hand
@@ -175,9 +191,9 @@ class GestureEngine:
         self._history: deque[tuple[float, float, float, str]] = deque(maxlen=90)
         self._swipe_block_until = 0.0
 
-        # Fist-hold
-        self._fist_since: Optional[float] = None
-        self._fist_block_until = 0.0
+        # Play/pause hold (open palm facing the camera, or fist)
+        self._pp_since: Optional[float] = None
+        self._pp_block_until = 0.0
 
         self._snapshot = EngineSnapshot()
         self._frame_w = 640
@@ -202,7 +218,7 @@ class GestureEngine:
 
         if tracked is None:
             self._history.clear()
-            self._fist_since = None
+            self._pp_since = None
             if self.state == self.ENGAGED:
                 if t - self._hand_last_seen > self.cfg.knob.hand_lost_grace_s:
                     events.append(KnobRelease(t=t, deg=self._effective_deg))
@@ -235,9 +251,9 @@ class GestureEngine:
         events += self._update_knob(hand, pinch, curl, pose, speed, t, snap)
         if self.state != self.ENGAGED:
             events += self._update_swipe(t, snap)
-            events += self._update_fist(pose, speed, t, snap)
+            events += self._update_playpause(hand, pose, speed, t, snap)
         else:
-            self._fist_since = None
+            self._pp_since = None
 
         snap.state = self.state
         snap.angle_deg = round(self._effective_deg, 2)
@@ -482,26 +498,48 @@ class GestureEngine:
         if cfg.invert:
             direction = -direction
         self._swipe_block_until = t + cfg.cooldown_s
+        # A palm lingering at the end of an open-palm swipe must not read as
+        # a play/pause hold — block it for its own cooldown.
+        self._pp_since = None
+        self._pp_block_until = max(
+            self._pp_block_until, t + self.cfg.playpause.cooldown_s)
         self._history.clear()
         snap.last_event = f"swipe {'right (next)' if direction > 0 else 'left (previous)'}"
         return [Swipe(t=t, direction=direction, speed=speed)]
 
     # ------------------------------------------------------------------
-    # fist-hold (play/pause)
+    # play/pause hold
     # ------------------------------------------------------------------
-    def _update_fist(self, pose: str, speed: float, t: float, snap: EngineSnapshot) -> list[GestureEvent]:
-        cfg = self.cfg.fist
-        if not cfg.enabled or t < self._fist_block_until:
-            self._fist_since = None if not cfg.enabled else self._fist_since
+    def _update_playpause(
+        self, hand: Hand, pose: str, speed: float, t: float, snap: EngineSnapshot
+    ) -> list[GestureEvent]:
+        """Play/pause on a held pose. Default pose is an open palm that must
+        actually FACE the camera (palm_facing_score) — a hand waving past or
+        the back of a raised hand never toggles playback. "fist" mode keeps
+        the old behaviour."""
+        cfg = self.cfg.playpause
+        if not cfg.enabled or t < self._pp_block_until:
+            self._pp_since = None
             return []
-        if pose == "fist" and speed < cfg.max_speed_frac:
-            if self._fist_since is None:
-                self._fist_since = t
-            elif t - self._fist_since >= cfg.hold_s:
-                self._fist_since = None
-                self._fist_block_until = t + cfg.cooldown_s
-                snap.last_event = "fist hold (play/pause)"
-                return [FistHold(t=t)]
+        if t - self._hand_first_seen < cfg.min_presence_s:
+            return []  # a hand entering the frame must not instantly toggle
+        if cfg.pose == "palm":
+            held = pose == "open"
+            if held and cfg.require_facing:
+                facing = palm_facing_score(hand)
+                snap.extra["facing"] = round(facing, 2)
+                held = facing >= cfg.facing_min
         else:
-            self._fist_since = None
+            held = pose == "fist"
+        if held and speed < cfg.max_speed_frac:
+            if self._pp_since is None:
+                self._pp_since = t
+            elif t - self._pp_since >= cfg.hold_s:
+                self._pp_since = None
+                self._pp_block_until = t + cfg.cooldown_s
+                snap.last_event = ("open palm" if cfg.pose == "palm" else "fist") + \
+                    " hold (play/pause)"
+                return [PlayPauseHold(t=t, pose=cfg.pose)]
+        else:
+            self._pp_since = None
         return []

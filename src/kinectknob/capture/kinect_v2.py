@@ -30,6 +30,7 @@ the container restart policy brings the device back cleanly.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Optional
 
@@ -102,6 +103,13 @@ class KinectV2Capture(CaptureBase):
         self._drops_reported = 0
         self._next_drop_log = 0.0
         self._depth_cache: Optional[np.ndarray] = None
+        # "Proper photo" stacking (see capture_photo); guarded by _photo_lock.
+        self._photo_lock = threading.Lock()
+        self._photo_want = 0
+        self._photo_acc: Optional[np.ndarray] = None
+        self._photo_n = 0
+        self._photo_result: Optional[np.ndarray] = None
+        self._photo_done = threading.Event()
         # ir_mode is fixed for the process lifetime, so the needed-frames set is too.
         need_ir = cfg.ir_mode != "off"
         self._needed = frozenset(
@@ -156,6 +164,10 @@ class KinectV2Capture(CaptureBase):
             self._drops_reported = dropped
             self._next_drop_log = t + 10.0
         raw = color.to_array()                       # (1080, 1920, 4) uint8
+        # libfreenect2 emits BGRX on Linux/libusb builds, but some pipelines
+        # produce RGBX — trust the frame's own format over an assumption.
+        fmt = getattr(getattr(color, "format", None), "name", "")
+        self._photo_accumulate(raw, fmt)
 
         if need_ir:
             # Sparse-subsampled mean luma is plenty for the day/night decision.
@@ -177,9 +189,8 @@ class KinectV2Capture(CaptureBase):
         # unmirrored so scene text reads correctly.
         fullres = None
         if self._seq % 30 == 0:
-            fmt_early = getattr(getattr(color, "format", None), "name", "")
             fullres = cv2.cvtColor(
-                raw, cv2.COLOR_RGBA2BGR if fmt_early == "RGBX" else cv2.COLOR_BGRA2BGR
+                raw, cv2.COLOR_RGBA2BGR if fmt == "RGBX" else cv2.COLOR_BGRA2BGR
             )
             # libfreenect2 delivers the color stream horizontally MIRRORED
             # (verified against scene text). Flip to true orientation so
@@ -193,9 +204,6 @@ class KinectV2Capture(CaptureBase):
         scale = target_w / raw.shape[1]
         size = (target_w, int(round(raw.shape[0] * scale)))
         small = cv2.resize(raw, size, interpolation=cv2.INTER_AREA)
-        # libfreenect2 emits BGRX on Linux/libusb builds, but some pipelines
-        # produce RGBX — trust the frame's own format over an assumption.
-        fmt = getattr(getattr(color, "format", None), "name", "")
         if fmt == "RGBX":
             rgb = cv2.cvtColor(small, cv2.COLOR_RGBA2RGB)
         else:
@@ -218,6 +226,53 @@ class KinectV2Capture(CaptureBase):
 
         self._seq += 1
         return Frame(rgb=rgb, depth_mm=self._depth_cache, t=t, seq=self._seq, fullres=fullres)
+
+    # -- proper photos (multi-frame stacking) ----------------------------
+    def capture_photo(self, frames: int = 8, timeout: float = 10.0) -> Optional[np.ndarray]:
+        """Take a "proper photo" for the whiteboard reader: average the next
+        ``frames`` consecutive full-res color frames. The scene is static, so
+        temporal stacking denoises like a long exposure (SNR ~ sqrt(N)) — and
+        since this binding exposes no exposure control on the color camera,
+        stacking is the strongest quality lever available. Blocks the CALLING
+        thread (the web server's executor); the capture thread accumulates
+        inside read(). Returns unmirrored BGR uint8, or None on timeout."""
+        with self._photo_lock:
+            self._photo_want = max(1, int(frames))
+            self._photo_acc = None
+            self._photo_n = 0
+            self._photo_result = None
+            self._photo_done.clear()
+            done = self._photo_done
+        if not done.wait(timeout):
+            with self._photo_lock:
+                self._photo_want = 0
+                self._photo_acc = None
+            return None
+        return self._photo_result
+
+    def _photo_accumulate(self, raw: np.ndarray, fmt: str) -> None:
+        """Called by read() on every color frame; a cheap no-op unless a
+        capture_photo() request is pending."""
+        with self._photo_lock:
+            if not self._photo_want:
+                return
+            bgr = cv2.cvtColor(
+                raw, cv2.COLOR_RGBA2BGR if fmt == "RGBX" else cv2.COLOR_BGRA2BGR
+            )
+            if self._photo_acc is None or self._photo_acc.shape != bgr.shape:
+                self._photo_acc = bgr.astype(np.float32)
+                self._photo_n = 1
+            else:
+                self._photo_acc += bgr
+                self._photo_n += 1
+            if self._photo_n >= self._photo_want:
+                mean = self._photo_acc / self._photo_n
+                # Flip like the cached fullres: unmirrored, scene text readable.
+                self._photo_result = cv2.flip(
+                    np.clip(np.rint(mean), 0, 255).astype(np.uint8), 1)
+                self._photo_want = 0
+                self._photo_acc = None
+                self._photo_done.set()
 
     def _ir_frame(self, ir, depth, t: float) -> Frame:
         """Night mode: track on the tone-mapped IR image. IR and depth come off

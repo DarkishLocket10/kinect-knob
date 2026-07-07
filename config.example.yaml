@@ -46,11 +46,15 @@ swipe:
   cooldown_s: 0.8
   min_presence_s: 0.35   # hand must exist this long first (no drive-by skips)
 
-fist:                    # optional play/pause on closed-fist hold
-  enabled: false
+playpause:               # play/pause on a held pose
+  enabled: true
+  pose: palm             # palm = open palm FACING the camera; fist = legacy
+  require_facing: true   # palm only counts when it actually faces the lens
+  facing_min: 0.3        # flat palm scores ~0.8, edge-on ~0
   hold_s: 0.7
   max_speed_frac: 0.25
   cooldown_s: 2.0
+  min_presence_s: 0.5    # hand must exist this long first (no drive-by toggles)
 
 web:
   host: 0.0.0.0

@@ -90,18 +90,35 @@ def create_app(
         return {"ok": True}
 
     @app.get("/api/snapshot")
-    async def snapshot():
-        """Latest full-resolution UNMIRRORED frame as JPEG (~1s old at most).
-        This is what the whiteboard reader consumes — the normal pipeline only
-        keeps a downscaled copy, far too small for handwriting."""
-        bgr, ts = shared.fullres()
+    async def snapshot(frames: int = 1, format: str = "jpeg", quality: int = 92):
+        """Full-resolution UNMIRRORED photo — what the whiteboard reader
+        consumes (the normal pipeline only keeps a downscaled copy, far too
+        small for handwriting). ``frames=N`` (2-32) averages N consecutive
+        frames into a denoised "proper photo" instead of grabbing the cached
+        ~1s-old preview frame; ``format=png`` returns lossless PNG;
+        ``quality`` is the JPEG quality otherwise."""
+        frames = max(1, min(32, frames))
+        quality = max(1, min(100, quality))
+        fmt = "png" if format.strip().lower() == "png" else "jpeg"
+        loop = asyncio.get_running_loop()
+        bgr, mode = None, "cached"
+        if frames > 1 and shared.photo_fn is not None:
+            bgr = await loop.run_in_executor(
+                None, shared.photo_fn, frames, frames / 30.0 + 3.0)
+            if bgr is not None:
+                mode = "stacked"
+        if bgr is None:
+            bgr, _ = shared.fullres()
         if bgr is None:
             return JSONResponse({"error": "no full-res frame yet"}, status_code=404)
-        loop = asyncio.get_running_loop()
-        jpg = await loop.run_in_executor(None, _encode_jpeg, bgr)
-        if jpg is None:
+        buf = await loop.run_in_executor(None, _encode_image, bgr, fmt, quality)
+        if buf is None:
             return JSONResponse({"error": "encode failed"}, status_code=500)
-        return Response(jpg, media_type="image/jpeg")
+        return Response(
+            buf, media_type="image/png" if fmt == "png" else "image/jpeg",
+            headers={"X-Snapshot-Mode": mode,
+                     "X-Snapshot-Frames": str(frames if mode == "stacked" else 1)},
+        )
 
     @app.get("/debug/stream")
     async def debug_stream():
@@ -137,6 +154,9 @@ def _render_jpeg(rgb, hands, snap, volume) -> bytes | None:
     return buf.tobytes() if ok else None
 
 
-def _encode_jpeg(bgr) -> bytes | None:
-    ok, buf = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+def _encode_image(bgr, fmt: str, quality: int) -> bytes | None:
+    if fmt == "png":
+        ok, buf = cv2.imencode(".png", bgr, [int(cv2.IMWRITE_PNG_COMPRESSION), 3])
+    else:
+        ok, buf = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
     return buf.tobytes() if ok else None
