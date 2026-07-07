@@ -87,5 +87,8 @@ class SharedState:
                     "hand_depth_m": eng.hand_depth_m,
                     "gated_out": eng.gated_out,
                     "last_event": eng.last_event,
+                    # e.g. {"facing": 0.78} while an open palm is up — the
+                    # live value to tune playpause.facing_min against
+                    "extra": dict(eng.extra),
                 },
             }
