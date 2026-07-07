@@ -281,8 +281,30 @@ TUNABLES: tuple[Tunable, ...] = (
         "playpause.facing_min", "Facing strictness",
         "How squarely the palm must face the camera. A flat palm scores "
         "about 0.8, edge-on about 0. Raise this if playback still toggles "
-        "on half-turned hands; lower it if you have to pose too precisely.",
+        "on half-turned hands; lower it if you have to pose too precisely. "
+        "The live score shows as 'facing' in /api/state while a hand is up.",
         "float", "Play/pause hold", 0.05, 0.7, 0.05, "",
+    ),
+    Tunable(
+        "playpause.invert_facing", "Invert palm/back",
+        "Flip this if the BACK of your hand triggers play/pause and your "
+        "palm doesn't — the sign depends on the camera + MediaPipe build.",
+        "bool", "Play/pause hold",
+    ),
+    Tunable(
+        "playpause.spread_min", "Finger spread minimum",
+        "Fingertips must be at least this far apart (relative to hand size). "
+        "A hand wrapped around or pressed against a held object bunches its "
+        "fingers (~0.15); a deliberate open palm spreads them (~0.4). "
+        "0 disables. Live value shows as 'spread' in /api/state.",
+        "float", "Play/pause hold", 0.0, 0.6, 0.05, "",
+    ),
+    Tunable(
+        "playpause.object_gap_m", "Held-object depth gap",
+        "Reject the hold when the palm surface is this much CLOSER to the "
+        "camera than the wrist — something is being held in front of it. "
+        "Needs the Kinect's depth. 0 disables.",
+        "float", "Play/pause hold", 0.0, 0.3, 0.01, "m",
     ),
     Tunable(
         "playpause.hold_s", "Hold duration",

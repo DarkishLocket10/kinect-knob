@@ -31,6 +31,11 @@ over the README where they differ.
   `palm_facing_score` in the engine); `KK_PLAYPAUSE_POSE=fist` restores the
   old fist trigger. Old `fist.*` keys in `data/tuning.json` are ignored after
   this rename (deliberate — they were tuned for the fist pose).
+- The facing SIGN was field-verified 2026-07-07 (the derivation-from-docs sign
+  was inverted: the back of the hand triggered). Don't re-derive it from
+  MediaPipe docs — if it reads inverted, flip `playpause.invert_facing`.
+  Held objects are rejected via `finger_spread` + a palm-vs-wrist depth gap;
+  live values show in `/api/state` engine.extra (facing / spread / obj_gap).
 
 ## Sharp edges
 

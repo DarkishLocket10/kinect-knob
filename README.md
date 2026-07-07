@@ -128,8 +128,12 @@ then `python -m pytest tests` (any Python ≥3.10 — no Kinect/mediapipe needed
 
 Play/pause only counts when the palm actually FACES the lens (a handedness-aware
 cross-product check) — the back of a raised hand, an edge-on palm, or a hand
-waving past never toggles playback. `KK_PLAYPAUSE_POSE=fist` restores the old
-closed-fist trigger; `KK_PLAYPAUSE_ENABLED=false` turns it off.
+waving past never toggles playback. A hand HOLDING something is rejected two
+ways: bunched fingertips (a wrapped hand can't spread its fingers) and, via the
+Kinect's depth, an object surface sitting closer to the camera than the wrist.
+If palm/back read inverted on your camera, flip "Invert palm/back" in the
+tuning UI. `KK_PLAYPAUSE_POSE=fist` restores the old closed-fist trigger;
+`KK_PLAYPAUSE_ENABLED=false` turns it off.
 
 Anti-misfire measures baked in: pinch must hold ~100 ms to engage (with
 hysteresis to release); a 3° deadband means grabbing never nudges the volume;

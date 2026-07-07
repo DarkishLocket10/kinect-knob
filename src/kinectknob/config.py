@@ -81,6 +81,9 @@ class PlayPauseConfig:
     pose: str = "palm"                  # "palm" (open palm facing the camera) | "fist"
     require_facing: bool = True         # palm pose must actually face the camera
     facing_min: float = 0.3             # min palm-facing score (see palm_facing_score)
+    invert_facing: bool = False         # flip if palm/back read inverted on your setup
+    spread_min: float = 0.25            # min fingertip spread; bunched = holding something (0 = off)
+    object_gap_m: float = 0.10          # reject when palm is this much nearer than wrist (0 = off)
     hold_s: float = 0.7                 # pose must hold still this long
     max_speed_frac: float = 0.25        # palm speed ceiling during the hold (widths/s)
     cooldown_s: float = 2.0

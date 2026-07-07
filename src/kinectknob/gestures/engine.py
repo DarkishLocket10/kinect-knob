@@ -141,14 +141,32 @@ def palm_facing_score(hand: Hand) -> float:
     wrist->index-MCP x wrist->pinky-MCP, normalised by hand size squared, with
     the sign folded through MediaPipe handedness. View-mirroring flips both
     the cross product and the reported handedness, so the score is invariant
-    to whether the feed is mirrored."""
+    to whether the feed is mirrored.
+
+    Sign convention FIELD-VERIFIED 2026-07-07 on the live pipeline (mirrored
+    feed + this MediaPipe build): the back of a raised right hand was scoring
+    positive under the opposite sign, triggering play/pause. If your camera or
+    MediaPipe version behaves differently, flip ``playpause.invert_facing``
+    instead of editing this."""
     size = hand.size
     if size < 1e-6:
         return 0.0
     a = hand.pts[INDEX_MCP] - hand.pts[WRIST]
     b = hand.pts[PINKY_MCP] - hand.pts[WRIST]
     cross = float(a[0] * b[1] - a[1] * b[0])
-    return (cross if hand.handedness == "Right" else -cross) / (size * size)
+    return (cross if hand.handedness == "Left" else -cross) / (size * size)
+
+
+def finger_spread(hand: Hand) -> float:
+    """Mean gap between adjacent fingertips (index..pinky) over hand size.
+    A deliberate open palm spreads its fingers (~0.4); a hand wrapped around
+    or pressed flat against a held object bunches them (~0.15)."""
+    size = hand.size
+    if size < 1e-6:
+        return 0.0
+    tips = (INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP)
+    gaps = [np.linalg.norm(hand.pts[a] - hand.pts[b]) for a, b in zip(tips, tips[1:])]
+    return float(np.mean(gaps)) / size
 
 
 @dataclass
@@ -251,7 +269,7 @@ class GestureEngine:
         events += self._update_knob(hand, pinch, curl, pose, speed, t, snap)
         if self.state != self.ENGAGED:
             events += self._update_swipe(t, snap)
-            events += self._update_playpause(hand, pose, speed, t, snap)
+            events += self._update_playpause(hand, pose, speed, t, snap, depth_sampler)
         else:
             self._pp_since = None
 
@@ -511,12 +529,20 @@ class GestureEngine:
     # play/pause hold
     # ------------------------------------------------------------------
     def _update_playpause(
-        self, hand: Hand, pose: str, speed: float, t: float, snap: EngineSnapshot
+        self,
+        hand: Hand,
+        pose: str,
+        speed: float,
+        t: float,
+        snap: EngineSnapshot,
+        depth_sampler: Optional[DepthSampler] = None,
     ) -> list[GestureEvent]:
         """Play/pause on a held pose. Default pose is an open palm that must
         actually FACE the camera (palm_facing_score) — a hand waving past or
-        the back of a raised hand never toggles playback. "fist" mode keeps
-        the old behaviour."""
+        the back of a raised hand never toggles playback. A hand HOLDING
+        something is rejected two ways: bunched fingertips (finger_spread)
+        and, with depth available, an object surface sitting closer to the
+        camera than the wrist plane. "fist" mode keeps the old behaviour."""
         cfg = self.cfg.playpause
         if not cfg.enabled or t < self._pp_block_until:
             self._pp_since = None
@@ -525,10 +551,27 @@ class GestureEngine:
             return []  # a hand entering the frame must not instantly toggle
         if cfg.pose == "palm":
             held = pose == "open"
-            if held and cfg.require_facing:
+            if held:
                 facing = palm_facing_score(hand)
+                if cfg.invert_facing:
+                    facing = -facing
+                spread = finger_spread(hand)
                 snap.extra["facing"] = round(facing, 2)
-                held = facing >= cfg.facing_min
+                snap.extra["spread"] = round(spread, 2)
+                if cfg.require_facing and facing < cfg.facing_min:
+                    held = False
+                if held and cfg.spread_min > 0 and spread < cfg.spread_min:
+                    held = False  # fingers bunched: likely wrapped around something
+                if held and cfg.object_gap_m > 0 and depth_sampler is not None:
+                    palm = hand.palm_center
+                    d_palm = depth_sampler(float(palm[0]), float(palm[1]))
+                    d_wrist = depth_sampler(
+                        float(hand.pts[WRIST][0]), float(hand.pts[WRIST][1]))
+                    if d_palm is not None and d_wrist is not None:
+                        gap = d_wrist - d_palm
+                        snap.extra["obj_gap"] = round(gap, 3)
+                        if gap > cfg.object_gap_m:
+                            held = False  # something sits in front of the palm
         else:
             held = pose == "fist"
         if held and speed < cfg.max_speed_frac:
