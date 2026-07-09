@@ -39,6 +39,7 @@ class CaptureConfig:
     # integration time, gain floats (the anti-blur mode); "manual:<ms>,<gain>".
     exposure: str = "auto"
     low_light_boost: bool = True        # auto-gamma brighten dim frames before tracking
+    crop: float = 1.0                   # crop-in zoom onto the frame centre (1.0 = full view, 2.0 = middle half)
 
 
 @dataclass
@@ -135,6 +136,7 @@ _ENV_MAP: dict[str, tuple[str, str, str]] = {
     "KK_IR_MODE": ("capture", "ir_mode", "str"),
     "KK_EXPOSURE": ("capture", "exposure", "str"),
     "KK_LOW_LIGHT_BOOST": ("capture", "low_light_boost", "bool"),
+    "KK_CROP": ("capture", "crop", "float"),
     "KK_USE_DEPTH": ("gate", "use_depth", "bool"),
     "KK_DEPTH_MIN_M": ("gate", "depth_min_m", "float"),
     "KK_DEPTH_MAX_M": ("gate", "depth_max_m", "float"),
@@ -246,6 +248,7 @@ def load_config(path: Optional[str] = None) -> AppConfig:
         raise ValueError(f"capture.ir_mode must be auto|off|always, got {cfg.capture.ir_mode!r}")
     cfg.capture.exposure = cfg.capture.exposure.strip().lower()
     parse_exposure(cfg.capture.exposure)  # fail fast on a bad spec
+    cfg.capture.crop = min(max(cfg.capture.crop, 1.0), 3.0)
     cfg.playpause.pose = cfg.playpause.pose.strip().lower()
     if cfg.playpause.pose not in ("palm", "fist"):
         raise ValueError(f"playpause.pose must be palm|fist, got {cfg.playpause.pose!r}")

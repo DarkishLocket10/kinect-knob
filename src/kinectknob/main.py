@@ -173,6 +173,7 @@ class App:
     def _vision_loop(self, tracker, engine: GestureEngine) -> None:
         import cv2
 
+        from .capture.crop import center_crop
         from .capture.lowlight import LowLightBoost
 
         booster = LowLightBoost()
@@ -193,6 +194,17 @@ class App:
 
             t0 = time.monotonic()
             rgb = frame.rgb
+            depth_mm = frame.depth_mm
+            # Crop-in (live-tunable): zoom onto the centre so the user fills
+            # the frame and motion at the edges (doorways, TV, passers-by)
+            # never becomes a candidate hand. Depth MUST get the same crop —
+            # the depth sampler maps tracked pixels by relative scale, which
+            # only survives an equal-fraction crop of both arrays.
+            zoom = self.cfg.capture.crop
+            if zoom > 1.001:
+                rgb = center_crop(rgb, zoom)
+                if depth_mm is not None:
+                    depth_mm = center_crop(depth_mm, zoom)
             fh, fw = rgb.shape[:2]
             proc_w = self.cfg.capture.proc_width  # live-tunable from the dashboard
             if fw > proc_w:
@@ -209,8 +221,8 @@ class App:
             hands = tracker.process(rgb, frame.t)
 
             depth_sampler = None
-            if frame.depth_mm is not None:
-                depth_sampler = _make_depth_sampler(frame.depth_mm, pw, ph)
+            if depth_mm is not None:
+                depth_sampler = _make_depth_sampler(depth_mm, pw, ph)
 
             events = engine.update(hands, frame.t, pw, ph, depth_sampler)
             if events:

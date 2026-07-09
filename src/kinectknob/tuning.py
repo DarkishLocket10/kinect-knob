@@ -183,6 +183,18 @@ TUNABLES: tuple[Tunable, ...] = (
     ),
     # ------------------------------------------------ who counts as a hand
     Tunable(
+        "capture.crop", "Crop-in (zoom)",
+        "Zoom the tracked view onto the centre of the frame: 1.0 = the full "
+        "camera view, 2.0 = only the middle half. Crop in until you fill the "
+        "picture — everything outside the crop (doorways, the TV, people "
+        "walking past) is invisible to tracking, and your hand gets more of "
+        "the model's attention, which helps at distance. The Live tracking "
+        "view shows exactly what the cropped tracker sees, so drag this "
+        "while watching it. Applies to the depth gate too (rgb and depth "
+        "are cropped together).",
+        "float", "Who counts as a hand", 1.0, 2.5, 0.05, "x",
+    ),
+    Tunable(
         "gate.min_score", "Detection confidence",
         "Hand detections the camera is less confident about are ignored "
         "entirely. Raise it to kill ghost detections (cushion patterns, "

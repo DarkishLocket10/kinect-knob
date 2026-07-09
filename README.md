@@ -183,6 +183,9 @@ override). The ones that matter:
 - `knob.filter_min_cutoff` / `filter_beta` — One Euro filter; lower cutoff =
   smoother at rest, higher beta = snappier fast twists.
 - `gate.depth_min_m` / `depth_max_m` — the "only me, from the couch" zone.
+- `capture.crop` — crop-in zoom onto the frame centre (dashboard slider):
+  everything outside the crop is invisible to tracking, and your hand fills
+  more of the model's view. Drag it while watching Live tracking.
 - `swipe.min_speed_frac` — raise it if skips feel too eager.
 - `capture.mirror` — keep `true`; it makes clockwise-from-your-view = louder.
   If direction feels backwards, flip `knob.invert` instead.
@@ -219,7 +222,7 @@ src/kinectknob/
   controller.py   gesture events → coalesced volume_set / track skip
   web/            FastAPI status UI + MJPEG debug stream
   main.py         thread wiring, watchdog, model download
-tests/            136 tests: engine geometry, swipe gates, busy-hand, low-light, config, volume math
+tests/            141 tests: engine geometry, swipe gates, busy-hand, low-light, crop, config, volume math
 deploy/           Unraid template + host udev rules
 docs/DESIGN.md    algorithm details & design rationale
 ```

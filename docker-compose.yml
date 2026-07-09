@@ -53,6 +53,9 @@ services:
       # anti-motion-blur mode) | manual:<ms>,<gain>.
       - KK_EXPOSURE=${KK_EXPOSURE:-auto}
       - KK_LOW_LIGHT_BOOST=${KK_LOW_LIGHT_BOOST:-true}
+      # Crop-in zoom onto the frame centre (1.0 = full view); usually set
+      # from the dashboard slider instead.
+      - KK_CROP=${KK_CROP:-1.0}
       # -- Gestures -----------------------------------------------------------
       - KK_SWIPE_ENABLED=${KK_SWIPE_ENABLED:-true}
       - KK_INVERT_SWIPE=${KK_INVERT_SWIPE:-false}
