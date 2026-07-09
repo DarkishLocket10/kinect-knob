@@ -16,6 +16,9 @@ capture:
   mirror: true           # selfie view; keep true so clockwise = louder
   proc_width: 640        # tracking resolution; raise to 960 for more reach
   ir_mode: auto          # Kinect v2 night mode: auto (switch when dark) | off | always
+  exposure: auto         # Kinect v2 color shutter: auto | auto:<ev> | semi:<ms> | manual:<ms>,<gain>
+                         # semi:8 caps integration at 8 ms — fast hands stay sharp in dim light
+  low_light_boost: true  # auto-gamma brighten dim frames before hand tracking
 
 gate:                    # who is allowed to control the knob
   use_depth: true        # needs a Kinect (depth camera)
@@ -26,6 +29,8 @@ gate:                    # who is allowed to control the knob
                          # wrist = holding something -> that hand can't control
                          # anything; the other (free) hand takes over. 0 = off
   busy_linger_s: 0.5     # busy verdict outlives the last holding frame by this
+  lost_grace_s: 0.25     # dropouts briefer than this keep hand identity/presence/
+                         # swipe history alive (fast swipes blur out for a frame or two)
 
 knob:
   engage_pinch: 0.42     # thumb-index distance / hand size to grip

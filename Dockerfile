@@ -55,6 +55,14 @@ RUN git clone --depth 1 --branch v0.2.1 https://github.com/OpenKinect/libfreenec
 ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
 RUN pip3 wheel --no-deps --wheel-dir /wheels freenect2==0.2.3
 
+# --- Color exposure bridge (native/kk_exposure.cpp) -------------------------
+# The freenect2 python binding never wrapped libfreenect2's color exposure
+# API; this shim calls it with the binding's own raw device pointer. Placed
+# AFTER the big clone/compile layers so source edits rebuild in seconds.
+COPY native/kk_exposure.cpp /opt/kk/kk_exposure.cpp
+RUN g++ -O2 -shared -fPIC -o /usr/local/lib/libkk_exposure.so \
+      /opt/kk/kk_exposure.cpp -I/usr/local/include -L/usr/local/lib -lfreenect2
+
 # ---------------------------------------------------------------------------
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive \

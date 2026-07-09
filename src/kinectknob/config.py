@@ -34,6 +34,11 @@ class CaptureConfig:
     mirror: bool = True                 # selfie view: your right = image right
     proc_width: int = 640               # frames wider than this are downscaled before tracking
     ir_mode: str = "auto"               # Kinect v2 night mode: auto | off | always
+    # Kinect v2 color exposure (motion blur lever): "auto" = camera default;
+    # "auto:<ev>" = auto with exposure compensation; "semi:<ms>" = cap the
+    # integration time, gain floats (the anti-blur mode); "manual:<ms>,<gain>".
+    exposure: str = "auto"
+    low_light_boost: bool = True        # auto-gamma brighten dim frames before tracking
 
 
 @dataclass
@@ -45,6 +50,7 @@ class GateConfig:
     min_score: float = 0.55             # ignore low-confidence (ghost) detections
     object_gap_m: float = 0.10          # busy hand: palm-area surface this much nearer than the wrist = holding an object (0 = off; needs depth)
     busy_linger_s: float = 0.5          # keep the busy verdict this long after the object was last seen
+    lost_grace_s: float = 0.25          # keep hand identity/presence/swipe history through dropouts this brief (motion blur)
 
 
 @dataclass
@@ -127,6 +133,8 @@ _ENV_MAP: dict[str, tuple[str, str, str]] = {
     "KK_MIRROR": ("capture", "mirror", "bool"),
     "KK_PROC_WIDTH": ("capture", "proc_width", "int"),
     "KK_IR_MODE": ("capture", "ir_mode", "str"),
+    "KK_EXPOSURE": ("capture", "exposure", "str"),
+    "KK_LOW_LIGHT_BOOST": ("capture", "low_light_boost", "bool"),
     "KK_USE_DEPTH": ("gate", "use_depth", "bool"),
     "KK_DEPTH_MIN_M": ("gate", "depth_min_m", "float"),
     "KK_DEPTH_MAX_M": ("gate", "depth_max_m", "float"),
@@ -148,6 +156,41 @@ _ENV_MAP: dict[str, tuple[str, str, str]] = {
 }
 
 _TRUE = {"1", "true", "yes", "on"}
+
+
+def parse_exposure(spec: str) -> tuple[str, tuple[float, ...]]:
+    """Parse a capture.exposure spec into (mode, args).
+
+    "auto"              -> ("auto", ())          camera default behaviour
+    "auto:<ev>"         -> ("auto", (ev,))       auto with exposure compensation
+    "semi:<ms>"         -> ("semi", (ms,))       cap integration time, gain floats
+    "manual:<ms>,<gain>" -> ("manual", (ms, gain))
+
+    Integration time is clamped to 0.1-66 ms (the sensor's range) and analog
+    gain to 1-4. Raises ValueError on anything else. Lives here (not in the
+    capture backend) so a bad spec fails at config load, before the device
+    is opened.
+    """
+    mode, _, rest = spec.strip().lower().partition(":")
+    try:
+        if mode == "auto":
+            return ("auto", (float(rest),) if rest else ())
+        if mode == "semi":
+            return ("semi", (min(max(float(rest), 0.1), 66.0),))
+        if mode == "manual":
+            ms_s, _, gain_s = rest.partition(",")
+            if not gain_s:
+                raise ValueError
+            return ("manual", (
+                min(max(float(ms_s), 0.1), 66.0),
+                min(max(float(gain_s), 1.0), 4.0),
+            ))
+    except ValueError:
+        pass
+    raise ValueError(
+        f"capture.exposure must be auto | auto:<ev> | semi:<ms> | "
+        f"manual:<ms>,<gain>, got {spec!r}"
+    )
 
 
 def _coerce(raw: str, kind: str) -> Any:
@@ -201,6 +244,8 @@ def load_config(path: Optional[str] = None) -> AppConfig:
     cfg.capture.ir_mode = cfg.capture.ir_mode.strip().lower()
     if cfg.capture.ir_mode not in ("auto", "off", "always"):
         raise ValueError(f"capture.ir_mode must be auto|off|always, got {cfg.capture.ir_mode!r}")
+    cfg.capture.exposure = cfg.capture.exposure.strip().lower()
+    parse_exposure(cfg.capture.exposure)  # fail fast on a bad spec
     cfg.playpause.pose = cfg.playpause.pose.strip().lower()
     if cfg.playpause.pose not in ("palm", "fist"):
         raise ValueError(f"playpause.pose must be palm|fist, got {cfg.playpause.pose!r}")

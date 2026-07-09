@@ -173,6 +173,9 @@ class App:
     def _vision_loop(self, tracker, engine: GestureEngine) -> None:
         import cv2
 
+        from .capture.lowlight import LowLightBoost
+
+        booster = LowLightBoost()
         dt_ema = 0.0    # smooth the interval, then invert: EMA of 1/dt reads
         proc_ema = 0.0  # high when frame intervals alternate (Jensen bias)
         last_t = time.monotonic()
@@ -196,6 +199,12 @@ class App:
                 scale = proc_w / fw
                 rgb = cv2.resize(rgb, (proc_w, int(round(fh * scale))), interpolation=cv2.INTER_AREA)
             ph, pw = rgb.shape[:2]
+
+            # Dim scenes (e.g. with the shutter capped against motion blur):
+            # lift midtones so the tracker still sees the hand. IR frames are
+            # already tone-mapped and self-illuminated — never boosted.
+            if self.cfg.capture.low_light_boost and not frame.ir:
+                rgb = booster.process(rgb)
 
             hands = tracker.process(rgb, frame.t)
 

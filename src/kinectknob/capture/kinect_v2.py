@@ -102,6 +102,8 @@ class KinectV2Capture(CaptureBase):
         self._listener: LatestQueueListener | None = None
         self._drops_reported = 0
         self._next_drop_log = 0.0
+        self._exp_logged: Optional[tuple[float, float]] = None
+        self._next_exp_log = 0.0
         self._depth_cache: Optional[np.ndarray] = None
         # "Proper photo" stacking (see capture_photo); guarded by _photo_lock.
         self._photo_lock = threading.Lock()
@@ -140,6 +142,23 @@ class KinectV2Capture(CaptureBase):
         self._running_ctx = self._device.running()
         self._running_ctx.__enter__()
         log.info("Kinect v2 streaming (1080p color + ToF depth, GPU depth pipeline)")
+        self._apply_exposure()
+
+    def _apply_exposure(self) -> None:
+        """Send the configured color exposure to the device (must be running).
+        Best-effort: a failure leaves the camera on its own auto-exposure."""
+        spec = self.cfg.exposure
+        if spec == "auto":
+            return
+        try:
+            from .kv2_exposure import apply_exposure
+
+            apply_exposure(self._device, spec)
+            log.info("color exposure set to %r (watch the exposure/gain log "
+                     "lines to confirm the sensor took it)", spec)
+        except Exception:  # noqa: BLE001 — exposure is an enhancement, never fatal
+            log.warning("could not set color exposure %r — camera stays on "
+                        "auto", spec, exc_info=True)
 
     def read(self) -> Optional[Frame]:
         FrameType = self._FrameType
@@ -163,6 +182,7 @@ class KinectV2Capture(CaptureBase):
             )
             self._drops_reported = dropped
             self._next_drop_log = t + 10.0
+        self._log_exposure(color, t)
         raw = color.to_array()                       # (1080, 1920, 4) uint8
         # libfreenect2 emits BGRX on Linux/libusb builds, but some pipelines
         # produce RGBX — trust the frame's own format over an assumption.
@@ -226,6 +246,28 @@ class KinectV2Capture(CaptureBase):
 
         self._seq += 1
         return Frame(rgb=rgb, depth_mm=self._depth_cache, t=t, seq=self._seq, fullres=fullres)
+
+    def _log_exposure(self, color, t: float) -> None:
+        """Surface the sensor's live exposure/gain (stamped on every color
+        frame by the firmware) so exposure settings are field-verifiable from
+        `docker logs`. Logs on material change, at most every 10 s."""
+        if t < self._next_exp_log:
+            return
+        try:
+            from freenect2 import lib
+
+            exp = float(lib.freenect2_frame_get_exposure(color._c_object))
+            gain = float(lib.freenect2_frame_get_gain(color._c_object))
+        except Exception:  # noqa: BLE001 — telemetry only
+            self._next_exp_log = t + 60.0
+            return
+        prev = self._exp_logged
+        if prev is not None and abs(exp - prev[0]) < 0.15 * max(prev[0], 1e-3) \
+                and abs(gain - prev[1]) < 0.15 * max(prev[1], 1e-3):
+            return
+        log.info("color sensor exposure %.2f ms, gain %.2f", exp, gain)
+        self._exp_logged = (exp, gain)
+        self._next_exp_log = t + 10.0
 
     # -- proper photos (multi-frame stacking) ----------------------------
     def capture_photo(self, frames: int = 8, timeout: float = 10.0) -> Optional[np.ndarray]:

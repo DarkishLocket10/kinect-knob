@@ -159,6 +159,20 @@ automatically switches hand tracking to the active-infrared camera and back
 again when the lights come on (`KK_IR_MODE=auto`, the default; `always` /
 `off` to force). The web UI shows an *IR night mode* chip while it's active.
 
+**Fast hands stay sharp (Kinect v2):** in dim rooms the color camera's
+auto-exposure stretches the shutter toward ~33 ms (and halves the stream to
+15 fps) — a fast swipe smears into a blur the landmark model can't follow.
+`KK_EXPOSURE=semi:8` caps the integration time at 8 ms while analog gain
+floats, trading blur for a darker, noisier image; the built-in **low-light
+boost** (auto-gamma, `KK_LOW_LIGHT_BOOST`, on by default) then lifts dim
+frames back into the tracker's comfort zone. libfreenect2's exposure API was
+never wrapped by the python binding — a small C++ bridge in the image
+(`native/kk_exposure.cpp`) calls it with the binding's own device pointer.
+The sensor's live shutter/gain shows in the logs (`color sensor exposure`).
+On top of that, brief tracking dropouts no longer reset a gesture: a swipe
+whose hand blurs out for a frame or two mid-motion still lands
+(`gate.lost_grace_s`).
+
 ## 6. Tuning
 
 Everything lives in [config.example.yaml](config.example.yaml) (env vars
@@ -205,7 +219,7 @@ src/kinectknob/
   controller.py   gesture events → coalesced volume_set / track skip
   web/            FastAPI status UI + MJPEG debug stream
   main.py         thread wiring, watchdog, model download
-tests/            129 tests: engine geometry, swipe gates, busy-hand, config, volume math
+tests/            136 tests: engine geometry, swipe gates, busy-hand, low-light, config, volume math
 deploy/           Unraid template + host udev rules
 docs/DESIGN.md    algorithm details & design rationale
 ```

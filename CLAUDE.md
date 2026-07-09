@@ -45,6 +45,23 @@ over the README where they differ.
   are dashboard tunables, and `holding`/`obj_gap` live in engine.extra —
   field-tune there rather than re-deriving geometry.
 
+## Motion blur / exposure (2026-07-09)
+
+- Swipes were dying in dim light: color auto-exposure stretches the shutter
+  (~33 ms, 15 fps) and fast hands smear. Fix is three-part: (1) shutter cap
+  via `KK_EXPOSURE=semi:8` — the python binding never wrapped libfreenect2's
+  exposure API, so `native/kk_exposure.cpp` (built into the image as
+  libkk_exposure.so) calls it via the binding's raw `Freenect2Device*`
+  (`Device._c_object`); (2) `capture.low_light_boost` auto-gamma re-brightens
+  the now-darker frames before MediaPipe; (3) `gate.lost_grace_s` keeps hand
+  identity/presence/swipe history through 1-2 frame blur dropouts (previously
+  ONE empty frame mid-swipe wiped history AND reset the 0.35 s presence gate,
+  making fast swipes physically impossible).
+- Field-verify exposure took effect via `docker logs`: "color sensor exposure
+  X ms, gain Y" — dim room should read ≈8 ms with semi:8, not ~30. Whiteboard
+  snapshot quality in dim light degrades with a capped shutter (darker/noisier
+  stacks); if that bites, revert KK_EXPOSURE=auto rather than disabling boost.
+
 ## Sharp edges
 
 - **Build fixes live in Dockerfile on purpose** (setuptools upgrade — Ubuntu

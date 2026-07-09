@@ -68,6 +68,34 @@ def test_two_finger_swipe_tolerates_blur_frames(cfg):
     assert len(swipes) == 1
 
 
+def test_swipe_survives_blur_dropout_frames(cfg):
+    """A fast swipe blurs the hand enough for tracking to LOSE it entirely
+    for a frame or two mid-motion. The lost-grace must carry the swipe's
+    history and presence through the gap — this used to kill every fast
+    swipe (history wiped + presence clock reset by a single empty frame)."""
+    tl = Timeline(GestureEngine(cfg))
+    _settle(tl, x=180)
+    for i in range(1, 7):
+        if i in (3, 4):                       # blur: hand vanishes mid-swipe
+            tl.step([])
+        else:
+            tl.step([make_hand(pose="two", center=(180 + i * 40, 300))])
+    swipes = [e for e in tl.events if isinstance(e, Swipe)]
+    assert len(swipes) == 1
+    assert swipes[0].direction == 1
+
+
+def test_long_dropout_still_resets_presence(cfg):
+    """The grace is for blur flickers, not for leaving: after a gap longer
+    than gate.lost_grace_s the presence gate applies afresh, so a hand
+    re-entering the frame mid-motion can't skip a track."""
+    tl = Timeline(GestureEngine(cfg))
+    _settle(tl, x=180)
+    tl.step([], n=12)                          # 0.4 s > lost_grace_s (0.25)
+    _swipe(tl, 180, 40)                        # immediately swipes on return
+    assert not any(isinstance(e, Swipe) for e in tl.events)
+
+
 def test_swipe_invert_flips_direction(cfg):
     cfg.swipe.invert = True
     tl = Timeline(GestureEngine(cfg))

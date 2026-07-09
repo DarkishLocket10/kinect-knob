@@ -49,6 +49,10 @@ services:
       # Kinect v2 IR night mode (auto|off|always). Passthrough added so .env is
       # authoritative; the app also defaults this to "auto" internally.
       - KK_IR_MODE=${KK_IR_MODE:-auto}
+      # Color exposure: auto | auto:<ev> | semi:<ms> (cap shutter — the
+      # anti-motion-blur mode) | manual:<ms>,<gain>.
+      - KK_EXPOSURE=${KK_EXPOSURE:-auto}
+      - KK_LOW_LIGHT_BOOST=${KK_LOW_LIGHT_BOOST:-true}
       # -- Gestures -----------------------------------------------------------
       - KK_SWIPE_ENABLED=${KK_SWIPE_ENABLED:-true}
       - KK_INVERT_SWIPE=${KK_INVERT_SWIPE:-false}

@@ -230,6 +230,23 @@ TUNABLES: tuple[Tunable, ...] = (
         "grab the knob between noisy frames.",
         "float", "Who counts as a hand", 0.0, 3.0, 0.1, "s",
     ),
+    Tunable(
+        "gate.lost_grace_s", "Dropout forgiveness",
+        "Tracking losing the hand for less than this keeps its identity, "
+        "presence and swipe motion history alive — a fast swipe blurs the "
+        "hand enough to vanish for a frame or two, and without this grace "
+        "every fast swipe died mid-gesture. Raise it if fast swipes still "
+        "get eaten; 0 restores the old drop-everything behaviour.",
+        "float", "Who counts as a hand", 0.0, 1.0, 0.05, "s",
+    ),
+    Tunable(
+        "capture.low_light_boost", "Low-light boost",
+        "Auto-brighten dim camera frames (gamma lift) before hand tracking. "
+        "Keeps hands trackable in a dim room — especially with the shutter "
+        "capped (KK_EXPOSURE) to prevent motion blur, which darkens the "
+        "image. No effect on bright scenes or in IR night mode.",
+        "bool", "Performance",
+    ),
     # ------------------------------------------------ swipe
     Tunable(
         "swipe.enabled", "Swipes enabled",

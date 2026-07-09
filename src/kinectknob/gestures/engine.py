@@ -23,7 +23,10 @@ Design notes
 * **Swipe**: open palm moving predominantly horizontally with enough travel
   and speed inside a sliding window. Swipes are suppressed while the knob is
   engaged and for `min_presence_s` after a hand first appears (so a hand
-  entering the frame never skips a track).
+  entering the frame never skips a track). Fast swipes motion-blur the hand
+  enough for tracking to drop it for a frame or two mid-gesture, so brief
+  dropouts (`gate.lost_grace_s`) keep the hand's identity, presence clock and
+  motion history alive instead of resetting them.
 
 * **Depth gating** (when the Kinect provides registered depth): hands outside
   the configured distance band are ignored entirely — people walking past in
@@ -276,18 +279,25 @@ class GestureEngine:
         tracked = self._select_primary(hands, t, depth_sampler, snap)
 
         if tracked is None:
-            self._history.clear()
             self._pp_since = None
+            lost_for = t - self._hand_last_seen
             if self.state == self.ENGAGED:
-                if t - self._hand_last_seen > self.cfg.knob.hand_lost_grace_s:
+                self._history.clear()
+                if lost_for > self.cfg.knob.hand_lost_grace_s:
                     events.append(KnobRelease(t=t, deg=self._effective_deg))
                     self._to_idle()
                     snap.last_event = "release (hand lost)"
                 # else: keep gripping through the dropout. The angle reference
                 # is re-based on reacquisition (gap check in _update_knob), so
                 # rotation during the blind gap is ignored rather than guessed.
-            else:
+            elif lost_for > self.cfg.gate.lost_grace_s:
+                self._history.clear()
                 self._to_idle()
+            # else: a dropout too brief to mean the hand left — typically ONE
+            # motion-blurred frame in the middle of a fast swipe. Keep the
+            # swipe history, presence clock and hand identity alive so the
+            # gesture completes when tracking reacquires; clearing here used
+            # to make every fast (= blurry) swipe physically impossible.
             snap.state = self.state
             self._snapshot = snap
             return events
@@ -382,9 +392,13 @@ class GestureEngine:
             )
 
         if not candidates:
-            # While engaged, remember where the gripping hand was so that only
-            # IT can resume the grip after a dropout — never someone else's hand.
-            if self.state != self.ENGAGED:
+            # Keep the identity anchor while ENGAGED (only the gripping hand
+            # may resume the grip) and through brief dropouts (so a blurred
+            # frame mid-swipe doesn't demote the hand to a stranger, which
+            # would reset the swipe presence clock). Drop it once truly gone.
+            if self.state != self.ENGAGED and (
+                t - self._hand_last_seen > gate.lost_grace_s
+            ):
                 self._last_palm = None
             return None
 
