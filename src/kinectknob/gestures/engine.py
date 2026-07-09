@@ -28,6 +28,14 @@ Design notes
 * **Depth gating** (when the Kinect provides registered depth): hands outside
   the configured distance band are ignored entirely — people walking past in
   the background can't touch your volume.
+
+* **Busy-hand rejection** (also depth-based): a hand holding an object (water
+  bottle, mug, toothbrush) shows a surface over its palm area sitting well in
+  FRONT of the wrist plane (object_gap). Such a hand is "busy": it cannot
+  engage the knob, swipe, or toggle playback — and if the other hand is
+  visible and free, primary tracking hands over to it, so the free hand
+  controls the knob while the busy one keeps holding. The verdict lingers
+  briefly (busy_linger_s) so depth flicker can't sneak an engage through.
 """
 from __future__ import annotations
 
@@ -169,6 +177,33 @@ def finger_spread(hand: Hand) -> float:
     return float(np.mean(gaps)) / size
 
 
+def object_gap(hand: Hand, depth_sampler: DepthSampler) -> Optional[float]:
+    """Metres by which the nearest surface over the palm area sits in FRONT of
+    the wrist. An empty hand reads near zero in any orientation (the palm-area
+    pixels land on the hand itself); a hand wrapped around a bottle / mug /
+    phone puts the object's surface well in front of the wrist plane. This is
+    object EVIDENCE, deliberately not hand shape — the knob pinch is shaped
+    exactly like holding a small object, so shape alone can't gate it.
+    None when depth has no readings here."""
+    d_wrist = depth_sampler(float(hand.pts[WRIST][0]), float(hand.pts[WRIST][1]))
+    if d_wrist is None or d_wrist <= 0.05:
+        return None
+    palm = hand.palm_center
+    probes = (
+        palm,
+        (palm + hand.pts[INDEX_MCP]) / 2.0,
+        (palm + hand.pts[PINKY_MCP]) / 2.0,
+    )
+    depths = []
+    for p in probes:
+        d = depth_sampler(float(p[0]), float(p[1]))
+        if d is not None and d > 0.05:
+            depths.append(d)
+    if not depths:
+        return None
+    return float(d_wrist - min(depths))
+
+
 @dataclass
 class _TrackedHand:
     hand: Hand
@@ -176,6 +211,8 @@ class _TrackedHand:
     pinch: float
     curl: float
     pose: str
+    holding: bool = False
+    obj_gap: Optional[float] = None
 
 
 class GestureEngine:
@@ -212,6 +249,10 @@ class GestureEngine:
         # Play/pause hold (open palm facing the camera, or fist)
         self._pp_since: Optional[float] = None
         self._pp_block_until = 0.0
+
+        # Busy hand (holding an object): verdict lingers past the last holding
+        # frame so depth flicker can't let a bottle hand briefly grab the knob.
+        self._busy_until = 0.0
 
         self._snapshot = EngineSnapshot()
         self._frame_w = 640
@@ -266,10 +307,23 @@ class GestureEngine:
         snap.palm_speed = round(speed, 3)
         snap.hand_depth_m = tracked.depth_m
 
-        events += self._update_knob(hand, pinch, curl, pose, speed, t, snap)
+        # A hand holding an object is "busy": it can't grab the knob, swipe,
+        # or toggle playback — use the other hand for control instead.
+        if tracked.holding:
+            self._busy_until = t + self.cfg.gate.busy_linger_s
+        busy = tracked.holding or t < self._busy_until
+        if tracked.obj_gap is not None:
+            snap.extra["obj_gap"] = round(tracked.obj_gap, 3)
+        if tracked.obj_gap is not None or busy:
+            snap.extra["holding"] = busy
+
+        events += self._update_knob(hand, pinch, curl, pose, speed, t, snap, busy)
         if self.state != self.ENGAGED:
-            events += self._update_swipe(t, snap)
-            events += self._update_playpause(hand, pose, speed, t, snap, depth_sampler)
+            if busy:
+                self._pp_since = None
+            else:
+                events += self._update_swipe(t, snap)
+                events += self._update_playpause(hand, pose, speed, t, snap, depth_sampler)
         else:
             self._pp_since = None
 
@@ -310,13 +364,21 @@ class GestureEngine:
                 snap.gated_out = "too small / too far"
                 continue
             depth_m: Optional[float] = None
+            gap: Optional[float] = None
+            holding = False
             if depth_sampler is not None and gate.use_depth:
                 depth_m = self._sample_hand_depth(hand, depth_sampler)
                 if depth_m is not None and not (gate.depth_min_m <= depth_m <= gate.depth_max_m):
                     snap.gated_out = f"outside depth band ({depth_m:.2f} m)"
                     continue
+                if gate.object_gap_m > 0:
+                    gap = object_gap(hand, depth_sampler)
+                    holding = gap is not None and gap > gate.object_gap_m
             candidates.append(
-                _TrackedHand(hand, depth_m, pinch_ratio(hand), curl_gap(hand), openness(hand))
+                _TrackedHand(
+                    hand, depth_m, pinch_ratio(hand), curl_gap(hand), openness(hand),
+                    holding, gap,
+                )
             )
 
         if not candidates:
@@ -335,14 +397,24 @@ class GestureEngine:
                 if d < best_d:
                     best_d = d
                     chosen = c
+        free = [c for c in candidates if not c.holding]
+        if (
+            chosen is not None and chosen.holding and free
+            and self.state != self.ENGAGED
+        ):
+            # The tracked hand is wrapped around an object and a free hand is
+            # up: hand control over to the free one (knob with the other hand).
+            chosen = None
         if chosen is None:
             if self.state == self.ENGAGED:
                 # A different hand must not inherit an engaged knob (and its
                 # accumulated rotation). Treat as "hand lost" instead.
                 return None
-            chosen = max(candidates, key=lambda c: c.hand.size)
+            # Prefer a free hand over one holding an object, whatever the size.
+            chosen = max(free or candidates, key=lambda c: c.hand.size)
             self._hand_first_seen = t
             self._history.clear()
+            self._busy_until = 0.0  # the busy linger belonged to the old hand
         self._last_palm = chosen.hand.palm_center
         return chosen
 
@@ -373,7 +445,7 @@ class GestureEngine:
     # ------------------------------------------------------------------
     def _update_knob(
         self, hand: Hand, pinch: float, curl: float, pose: str, speed: float,
-        t: float, snap: EngineSnapshot
+        t: float, snap: EngineSnapshot, busy: bool = False
     ) -> list[GestureEvent]:
         cfg = self.cfg.knob
         events: list[GestureEvent] = []
@@ -392,13 +464,21 @@ class GestureEngine:
         )
 
         if self.state == self.IDLE:
-            if pinch_ok and not relaxed_curl:
+            if pinch_ok and not relaxed_curl and not busy:
                 self.state = self.ENGAGING
                 self._engage_count = 1
                 self._prev_angles = angles
             return events
 
         if self.state == self.ENGAGING:
+            if busy:
+                # The hand turned out to be holding an object (pinching a
+                # bottle / toothbrush reads exactly like the knob grip): abort.
+                # An already-ENGAGED grip is never busy-checked — release stays
+                # the pinch's job, consistent with the pose/curl rule above.
+                self.state = self.IDLE
+                self._prev_angles = None
+                return events
             if pinch_ok and relaxed_curl:
                 # Pose/curl flicker mid-debounce (fingers mid-curl during a
                 # regrip): HOLD the count rather than resetting to idle, or

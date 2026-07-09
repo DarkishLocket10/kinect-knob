@@ -22,6 +22,10 @@ gate:                    # who is allowed to control the knob
   depth_min_m: 0.5
   depth_max_m: 3.0       # hands beyond this are ignored (guests, TV, pets)
   min_hand_frac: 0.045   # min hand size vs frame height (distance proxy)
+  object_gap_m: 0.10     # busy hand: object surface this much nearer than the
+                         # wrist = holding something -> that hand can't control
+                         # anything; the other (free) hand takes over. 0 = off
+  busy_linger_s: 0.5     # busy verdict outlives the last holding frame by this
 
 knob:
   engage_pinch: 0.42     # thumb-index distance / hand size to grip

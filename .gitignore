@@ -6,3 +6,4 @@ models/*.task
 .env
 *.egg-info/
 data/
+.claude/

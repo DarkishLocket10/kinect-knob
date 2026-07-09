@@ -36,6 +36,14 @@ over the README where they differ.
   MediaPipe docs — if it reads inverted, flip `playpause.invert_facing`.
   Held objects are rejected via `finger_spread` + a palm-vs-wrist depth gap;
   live values show in `/api/state` engine.extra (facing / spread / obj_gap).
+- Gate-level busy-hand rejection (`gate.object_gap_m`, depth-only): a hand
+  holding an object can't engage the knob / swipe / play-pause, and a free
+  hand steals primary from a holding one. Shape checks can't gate the knob
+  (the pinch IS a holding shape) — only depth object evidence does. Thin
+  objects pinch-held (toothbrush tip-grip) may still slip through if the
+  handle misses the palm probes; the gap threshold + `gate.busy_linger_s`
+  are dashboard tunables, and `holding`/`obj_gap` live in engine.extra —
+  field-tune there rather than re-deriving geometry.
 
 ## Sharp edges
 

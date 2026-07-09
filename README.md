@@ -143,6 +143,16 @@ visible ≥0.35 s (someone walking past can't skip your track); with a Kinect,
 **hands outside 0.5–3 m are ignored entirely** via the depth camera; and
 `KK_MAX_VOLUME` (default 0.9 in compose) hard-caps what a gesture can ever set.
 
+**Busy-hand rejection (Kinect depth):** a hand holding an object — water
+bottle, mug, toothbrush — is "busy" and can't grab the knob, swipe, or toggle
+playback at all. Detection is object *evidence*, not hand shape (a grip on a
+toothbrush is shaped exactly like the knob pinch): the held object's surface
+sits well in front of the wrist plane over the palm area (`gate.object_gap_m`,
+0 disables). While one hand is busy, your **other hand takes over
+automatically** — raise it and it becomes the controlling hand even though
+selection normally prefers the bigger/closer hand. Live `obj_gap` / `holding`
+readouts appear in the web UI and `/api/state` for tuning.
+
 **Works in the dark (Kinect v2):** the ToF sensor carries its own IR
 illuminator, so when the room goes dark — movie night — the service
 automatically switches hand tracking to the active-infrared camera and back
@@ -195,7 +205,7 @@ src/kinectknob/
   controller.py   gesture events → coalesced volume_set / track skip
   web/            FastAPI status UI + MJPEG debug stream
   main.py         thread wiring, watchdog, model download
-tests/            42 tests: engine geometry, swipe gates, config, volume math
+tests/            129 tests: engine geometry, swipe gates, busy-hand, config, volume math
 deploy/           Unraid template + host udev rules
 docs/DESIGN.md    algorithm details & design rationale
 ```

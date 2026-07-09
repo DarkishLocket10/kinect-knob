@@ -43,6 +43,8 @@ class GateConfig:
     depth_max_m: float = 3.0
     min_hand_frac: float = 0.045        # min hand size as fraction of frame height
     min_score: float = 0.55             # ignore low-confidence (ghost) detections
+    object_gap_m: float = 0.10          # busy hand: palm-area surface this much nearer than the wrist = holding an object (0 = off; needs depth)
+    busy_linger_s: float = 0.5          # keep the busy verdict this long after the object was last seen
 
 
 @dataclass

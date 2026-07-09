@@ -212,6 +212,24 @@ TUNABLES: tuple[Tunable, ...] = (
         "the couch can't touch your volume.",
         "float", "Who counts as a hand", 1.0, 6.0, 0.1, "m",
     ),
+    Tunable(
+        "gate.object_gap_m", "Held-object rejection",
+        "A hand holding something (bottle, mug, toothbrush) is 'busy': it "
+        "can't grab the knob, swipe, or toggle playback — use your other "
+        "hand, which takes over automatically when both are visible. "
+        "Detected via the Kinect's depth: the held object's surface sits at "
+        "least this much nearer the camera than the wrist. Lower = stricter "
+        "rejection but more chance an empty hand reads as busy; 0 disables. "
+        "Live values show as 'obj_gap' / 'holding' in Live tracking.",
+        "float", "Who counts as a hand", 0.0, 0.30, 0.01, "m",
+    ),
+    Tunable(
+        "gate.busy_linger_s", "Busy-hand linger",
+        "How long a hand stays 'busy' after the held object was last seen — "
+        "rides through depth flicker so a bottle in the hand can't briefly "
+        "grab the knob between noisy frames.",
+        "float", "Who counts as a hand", 0.0, 3.0, 0.1, "s",
+    ),
     # ------------------------------------------------ swipe
     Tunable(
         "swipe.enabled", "Swipes enabled",
