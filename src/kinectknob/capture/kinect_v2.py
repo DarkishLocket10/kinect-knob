@@ -112,6 +112,16 @@ class KinectV2Capture(CaptureBase):
         self._photo_n = 0
         self._photo_result: Optional[np.ndarray] = None
         self._photo_done = threading.Event()
+        # IR "proper photo" stacking (capture_ir_photo); same pattern, same lock.
+        self._irphoto_want = 0
+        self._irphoto_acc: Optional[np.ndarray] = None
+        self._irphoto_n = 0
+        self._irphoto_result: Optional[np.ndarray] = None
+        self._irphoto_done = threading.Event()
+        # Latest full-res color-aligned depth (mm) for region_depth(); the
+        # ToF sensor self-illuminates, so this stays valid in a dark room.
+        self._board_depth: Optional[np.ndarray] = None
+        self._board_depth_t = 0.0
         # ir_mode is fixed for the process lifetime, so the needed-frames set is too.
         need_ir = cfg.ir_mode != "off"
         self._needed = frozenset(
@@ -188,6 +198,8 @@ class KinectV2Capture(CaptureBase):
         # produce RGBX — trust the frame's own format over an assumption.
         fmt = getattr(getattr(color, "format", None), "name", "")
         self._photo_accumulate(raw, fmt)
+        if ir is not None and self._irphoto_want:
+            self._irphoto_accumulate(ir.to_array())
 
         if need_ir:
             # Sparse-subsampled mean luma is plenty for the day/night decision.
@@ -203,6 +215,12 @@ class KinectV2Capture(CaptureBase):
                     "dark" if use_ir else "bright",
                 )
             if use_ir:
+                # Registration is pure geometry — it works on dark color
+                # frames — so the aligned board-depth cache stays fresh at
+                # night too (region_depth serves the whiteboard reader's
+                # obstruction check around the clock). ~1/s is plenty.
+                if self._seq % 30 == 0 or self._board_depth is None:
+                    self._update_board_depth(color, depth)
                 return self._ir_frame(ir, depth, t)
         # Stash a full-res copy about once a second for the snapshot endpoint /
         # whiteboard reader (~6 MB convert+copy per second — negligible). Kept
@@ -236,6 +254,8 @@ class KinectV2Capture(CaptureBase):
                 )
                 big = big_depth.to_array()           # (1082, 1920) float32 mm
                 aligned = big[1:-1, :]               # rows align with color
+                self._board_depth = aligned.copy()   # full-res, for region_depth
+                self._board_depth_t = time.time()
                 depth_small = cv2.resize(aligned, size, interpolation=cv2.INTER_NEAREST)
                 self._depth_cache = np.nan_to_num(
                     depth_small, copy=False, nan=0.0, posinf=0.0, neginf=0.0
@@ -315,6 +335,88 @@ class KinectV2Capture(CaptureBase):
                 self._photo_want = 0
                 self._photo_acc = None
                 self._photo_done.set()
+
+    def capture_ir_photo(self, frames: int = 8, timeout: float = 10.0) -> Optional[np.ndarray]:
+        """Average the next ``frames`` ACTIVE-IR frames and tone-map to uint8
+        RGB. The ToF sensor self-illuminates, so this works in a pitch-black
+        room. Requires ir_mode != off (otherwise IR frames never stream and
+        this times out to None). Flipped like the color photo so scene text
+        reads correctly."""
+        with self._photo_lock:
+            self._irphoto_want = max(1, int(frames))
+            self._irphoto_acc = None
+            self._irphoto_n = 0
+            self._irphoto_result = None
+            self._irphoto_done.clear()
+            done = self._irphoto_done
+        if not done.wait(timeout):
+            with self._photo_lock:
+                self._irphoto_want = 0
+                self._irphoto_acc = None
+            return None
+        return self._irphoto_result
+
+    def _irphoto_accumulate(self, arr: np.ndarray) -> None:
+        """Called by read() when an IR photo request is pending."""
+        with self._photo_lock:
+            if not self._irphoto_want:
+                return
+            ir = np.asarray(arr, dtype=np.float32)
+            if ir.ndim == 3:
+                ir = ir[..., 0]
+            if self._irphoto_acc is None or self._irphoto_acc.shape != ir.shape:
+                self._irphoto_acc = ir.copy()
+                self._irphoto_n = 1
+            else:
+                self._irphoto_acc += ir
+                self._irphoto_n += 1
+            if self._irphoto_n >= self._irphoto_want:
+                mean = self._irphoto_acc / self._irphoto_n
+                # Tone-map the STACKED float frame (cleaner than stacking
+                # tone-mapped uint8), then flip to match the unmirrored color.
+                self._irphoto_result = cv2.flip(ir_to_rgb(mean), 1)
+                self._irphoto_want = 0
+                self._irphoto_acc = None
+                self._irphoto_done.set()
+
+    def _update_board_depth(self, color, depth) -> None:
+        """Refresh the full-res color-aligned depth cache (IR night mode —
+        the color path refreshes it inside its own registration block)."""
+        try:
+            _, _, big_depth = self._device.registration.apply(
+                color, depth, with_big_depth=True
+            )
+            big = big_depth.to_array()
+            self._board_depth = big[1:-1, :].copy()
+            self._board_depth_t = time.time()
+        except Exception:  # noqa: BLE001 — stats endpoint just stays stale
+            log.debug("board-depth registration failed", exc_info=True)
+
+    def region_depth(self, x1: int, y1: int, x2: int, y2: int) -> Optional[dict]:
+        """Depth stats (mm) over a region given in UNMIRRORED full-res color
+        coordinates — the same frame /api/snapshot serves, so a whiteboard
+        crop region can be passed verbatim. The aligned depth map follows the
+        RAW (mirrored) color stream, hence the x flip. Self-illuminated ToF:
+        valid day or pitch-black night. None until a depth frame has landed."""
+        arr = self._board_depth
+        if arr is None:
+            return None
+        h, w = arr.shape
+        x1, x2 = sorted((max(0, min(w, int(x1))), max(0, min(w, int(x2)))))
+        y1, y2 = sorted((max(0, min(h, int(y1))), max(0, min(h, int(y2)))))
+        if x2 <= x1 or y2 <= y1:
+            return None
+        sub = arr[y1:y2, w - x2:w - x1]
+        valid = sub[np.isfinite(sub) & (sub > 0)]
+        out = {
+            "age_s": round(time.time() - self._board_depth_t, 1),
+            "valid_frac": round(float(valid.size) / sub.size, 3),
+        }
+        if valid.size:
+            p = np.percentile(valid, [5, 10, 50, 90])
+            out.update(p05_mm=int(p[0]), p10_mm=int(p[1]),
+                       p50_mm=int(p[2]), p90_mm=int(p[3]))
+        return out
 
     def _ir_frame(self, ir, depth, t: float) -> Frame:
         """Night mode: track on the tone-mapped IR image. IR and depth come off

@@ -25,9 +25,14 @@ class SharedState:
         self.last_frame_t: float = 0.0                  # monotonic
         self._fullres: Optional[np.ndarray] = None      # unmirrored BGR 1080p
         self._fullres_t: float = 0.0
-        # Backend hook for stacked "proper photos" (capture_photo); set once
-        # by main before the threads start, called from the web executor.
+        # Backend hooks, set once by main before the threads start and called
+        # from the web executor: stacked "proper photos" (capture_photo),
+        # stacked active-IR photos (capture_ir_photo), and aligned-depth
+        # region stats (region_depth) for the whiteboard obstruction check.
         self.photo_fn: Optional[Callable[[int, float], Optional[np.ndarray]]] = None
+        self.ir_photo_fn: Optional[Callable[[int, float], Optional[np.ndarray]]] = None
+        self.region_depth_fn: Optional[
+            Callable[[int, int, int, int], Optional[dict]]] = None
 
     def update_vision(
         self,

@@ -98,8 +98,12 @@ class App:
             return EXIT_CAPTURE_FAILURE
         self.shared.backend = capture.name
         self.shared.has_depth = capture.has_depth
-        # Kinect v2 can stack N consecutive frames into a "proper photo".
+        # Kinect v2 can stack N consecutive frames into a "proper photo",
+        # do the same on the active-IR stream, and serve aligned-depth
+        # region stats for the whiteboard reader's obstruction check.
         self.shared.photo_fn = getattr(capture, "capture_photo", None)
+        self.shared.ir_photo_fn = getattr(capture, "capture_ir_photo", None)
+        self.shared.region_depth_fn = getattr(capture, "region_depth", None)
 
         tracker = HandTracker(self.cfg.model_path, self.cfg.num_hands, self.cfg.mp_delegate)
         engine = GestureEngine(self.cfg)

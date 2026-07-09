@@ -90,17 +90,37 @@ def create_app(
         return {"ok": True}
 
     @app.get("/api/snapshot")
-    async def snapshot(frames: int = 1, format: str = "jpeg", quality: int = 92):
+    async def snapshot(frames: int = 1, format: str = "jpeg", quality: int = 92,
+                       ir: int = 0):
         """Full-resolution UNMIRRORED photo — what the whiteboard reader
         consumes (the normal pipeline only keeps a downscaled copy, far too
         small for handwriting). ``frames=N`` (2-32) averages N consecutive
         frames into a denoised "proper photo" instead of grabbing the cached
         ~1s-old preview frame; ``format=png`` returns lossless PNG;
-        ``quality`` is the JPEG quality otherwise."""
+        ``quality`` is the JPEG quality otherwise. ``ir=1`` returns a stacked
+        ACTIVE-IR photo instead (512x424 tone-mapped; self-illuminated, so it
+        works in a pitch-black room; needs ir_mode != off)."""
         frames = max(1, min(32, frames))
         quality = max(1, min(100, quality))
         fmt = "png" if format.strip().lower() == "png" else "jpeg"
         loop = asyncio.get_running_loop()
+        if ir:
+            if shared.ir_photo_fn is None:
+                return JSONResponse({"error": "IR photos not supported by this "
+                                              "backend"}, status_code=404)
+            img = await loop.run_in_executor(
+                None, shared.ir_photo_fn, frames, frames / 30.0 + 3.0)
+            if img is None:
+                return JSONResponse({"error": "no IR frames arrived — is "
+                                              "ir_mode off?"}, status_code=404)
+            buf = await loop.run_in_executor(None, _encode_image, img, fmt, quality)
+            if buf is None:
+                return JSONResponse({"error": "encode failed"}, status_code=500)
+            return Response(
+                buf, media_type="image/png" if fmt == "png" else "image/jpeg",
+                headers={"X-Snapshot-Mode": "ir-stacked",
+                         "X-Snapshot-Frames": str(frames)},
+            )
         bgr, mode = None, "cached"
         if frames > 1 and shared.photo_fn is not None:
             bgr = await loop.run_in_executor(
@@ -119,6 +139,22 @@ def create_app(
             headers={"X-Snapshot-Mode": mode,
                      "X-Snapshot-Frames": str(frames if mode == "stacked" else 1)},
         )
+
+    @app.get("/api/region_depth")
+    async def region_depth(x1: int, y1: int, x2: int, y2: int):
+        """Aligned-depth stats (mm) over a full-res color-coordinate region —
+        pass a whiteboard crop region verbatim. ToF is self-illuminated:
+        answers "is something physically in front of the boards" day or
+        night, which is a far more reliable obstruction signal than judging
+        occlusion from the color image."""
+        if shared.region_depth_fn is None:
+            return JSONResponse({"error": "depth not supported by this backend"},
+                                status_code=404)
+        loop = asyncio.get_running_loop()
+        out = await loop.run_in_executor(None, shared.region_depth_fn, x1, y1, x2, y2)
+        if out is None:
+            return JSONResponse({"error": "no aligned depth yet"}, status_code=404)
+        return out
 
     @app.get("/debug/stream")
     async def debug_stream():
