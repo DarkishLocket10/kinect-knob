@@ -85,3 +85,11 @@ def test_unknown_yaml_key_rejected(tmp_path):
 def test_appconfig_is_self_contained():
     cfg = AppConfig()
     assert cfg.ha.media_entity == ""  # only load_config applies the fallback
+
+
+def test_logo_led_default_and_env():
+    assert load_config().capture.logo_led == 0
+    with mock.patch.dict(os.environ, {"KK_LOGO_LED": "250"}, clear=False):
+        assert load_config().capture.logo_led == 250
+    with mock.patch.dict(os.environ, {"KK_LOGO_LED": "-1"}, clear=False):
+        assert load_config().capture.logo_led == -1

@@ -64,3 +64,22 @@ def apply_exposure(device, spec: str) -> bool:
     if rc != 0:
         raise RuntimeError(f"exposure bridge returned {rc} for {spec!r}")
     return True
+
+
+def apply_led(device, level: int) -> None:
+    """Set the Kinect v2's indicator LEDs (the glowing white Xbox logo) to
+    ``level`` (0..1000, 0 = off) via the same bridge library. Both LED ids
+    are set; the depth IR illuminators are unaffected (different subsystem).
+    Raises on a missing bridge or a bad level — callers treat it best-effort."""
+    if not 0 <= level <= 1000:
+        raise ValueError(f"logo LED level {level} outside 0..1000")
+
+    lib = ctypes.CDLL(_LIB_NAME)
+    lib.kk_set_led.restype = ctypes.c_int
+    lib.kk_set_led.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+
+    ptr = ctypes.c_void_p(_device_ptr(device))
+    for led_id in (0, 1):
+        rc = lib.kk_set_led(ptr, led_id, level)
+        if rc != 0:
+            raise RuntimeError(f"LED bridge returned {rc} for id {led_id}")

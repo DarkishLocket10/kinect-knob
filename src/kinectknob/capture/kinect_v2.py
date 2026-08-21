@@ -153,6 +153,22 @@ class KinectV2Capture(CaptureBase):
         self._running_ctx.__enter__()
         log.info("Kinect v2 streaming (1080p color + ToF depth, GPU depth pipeline)")
         self._apply_exposure()
+        self._apply_logo_led()
+
+    def _apply_logo_led(self) -> None:
+        """Dim/kill the white Xbox-logo indicator LED (must be running).
+        Best-effort: a failure just leaves the logo at firmware default."""
+        level = self.cfg.logo_led
+        if level < 0:
+            return
+        try:
+            from .kv2_exposure import apply_led
+
+            apply_led(self._device, level)
+            log.info("Xbox logo LED set to %d/1000", level)
+        except Exception:  # noqa: BLE001 — cosmetic, never fatal
+            log.warning("could not set logo LED to %d — logo stays at "
+                        "firmware default", level, exc_info=True)
 
     def _apply_exposure(self) -> None:
         """Send the configured color exposure to the device (must be running).

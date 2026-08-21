@@ -38,6 +38,10 @@ class CaptureConfig:
     # "auto:<ev>" = auto with exposure compensation; "semi:<ms>" = cap the
     # integration time, gain floats (the anti-blur mode); "manual:<ms>,<gain>".
     exposure: str = "auto"
+    # Kinect v2 white Xbox-logo LED brightness, 0..1000 (0 = off). It is just
+    # an indicator — the depth IR illuminators are a separate subsystem. -1
+    # leaves the firmware default (full brightness while streaming).
+    logo_led: int = 0
     low_light_boost: bool = True        # auto-gamma brighten dim frames before tracking
     crop: float = 1.0                   # crop-in zoom onto the frame centre (1.0 = full view, 2.0 = middle half)
 
@@ -135,6 +139,7 @@ _ENV_MAP: dict[str, tuple[str, str, str]] = {
     "KK_PROC_WIDTH": ("capture", "proc_width", "int"),
     "KK_IR_MODE": ("capture", "ir_mode", "str"),
     "KK_EXPOSURE": ("capture", "exposure", "str"),
+    "KK_LOGO_LED": ("capture", "logo_led", "int"),
     "KK_LOW_LIGHT_BOOST": ("capture", "low_light_boost", "bool"),
     "KK_CROP": ("capture", "crop", "float"),
     "KK_USE_DEPTH": ("gate", "use_depth", "bool"),

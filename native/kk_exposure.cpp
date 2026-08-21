@@ -40,3 +40,32 @@ int kk_set_color_manual_exposure(void *device, float integration_time_ms,
 }
 
 }  // extern "C"
+
+// ---------------------------------------------------------------------------
+// Indicator LED control (the glowing white Xbox logo on the front).
+//
+// libfreenect2 exposes Freenect2Device::setLedStatus(LedSettings) but the
+// python binding never wrapped it either. The logo is purely an indicator —
+// the depth IR illuminators are driven by the depth firmware and are not
+// touched by this command. LedId is 0 or 1 (the logo is 0; 1 is set too for
+// completeness), level is 0..1000.
+
+#include <libfreenect2/led_settings.h>
+
+extern "C" {
+
+int kk_set_led(void *device, int led_id, int level) {
+    if (device == nullptr) return -1;
+    if (led_id < 0 || led_id > 1 || level < 0 || level > 1000) return -2;
+    libfreenect2::LedSettings s;
+    s.LedId = static_cast<uint16_t>(led_id);
+    s.Mode = 0;  // constant
+    s.StartLevel = static_cast<uint16_t>(level);
+    s.StopLevel = static_cast<uint16_t>(level);
+    s.IntervalInMs = 0;
+    s.Reserved = 0;
+    static_cast<libfreenect2::Freenect2Device *>(device)->setLedStatus(s);
+    return 0;
+}
+
+}  // extern "C"
