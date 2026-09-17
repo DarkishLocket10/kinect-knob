@@ -35,6 +35,10 @@ services:
     device_cgroup_rules:
       - "c 189:* rmw"   # char major 189 = USB devices
     environment:
+      # Unbuffered stdout: python block-buffers when its stdout is a pipe, so
+      # `docker logs` lagged minutes behind reality — and the camera-recovery
+      # story is told entirely through those lines.
+      - PYTHONUNBUFFERED=1
       # -- Home Assistant ---------------------------------------------------
       - KK_HA_URL=${KK_HA_URL}
       - KK_HA_TOKEN=${KK_HA_TOKEN}
