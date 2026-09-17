@@ -150,12 +150,27 @@ async function tick() {
     const s = await (await fetch('/api/state')).json();
     const e = s.engine, c = s.controller;
 
+    // "no frames" and "idling on purpose" look identical from fps alone, and
+    // the difference is the whole point of presence gating — label it.
+    const cam = s.camera === 'absent'
+      ? chip('camera: waiting (' + Math.round(s.camera_waiting_s || 0) + 's)', 'err')
+      : s.camera === 'error'
+        ? chip('camera: error', 'err')
+        : chip('camera: ' + s.backend, (s.fps > 5 || s.idle) ? 'on' : 'err');
+    const pres = s.presence && s.presence.ready
+      ? chip(s.presence.present
+               ? 'present (' + (s.presence.occupancy * 100).toFixed(1) + '%)'
+               : 'room empty — idling',
+             s.presence.present ? 'on' : 'warn')
+      : null;
     const chips = [
-      chip('camera: ' + s.backend, s.fps > 5 ? 'on' : 'err'),
-      chip(s.fps + ' fps'),
+      cam,
+      ...(pres ? [pres] : []),
+      chip(s.idle ? 'tracking paused' : s.fps + ' fps', s.idle ? 'warn' : 'on'),
       chip(s.proc_ms + ' ms/frame'),
       chip(s.has_depth ? 'depth: on' : 'depth: none', s.has_depth ? 'on' : 'warn'),
       ...(s.ir_active ? [chip('IR night mode', 'on')] : []),
+      ...(s.recycles ? [chip('camera recycled ' + s.recycles + 'x', 'warn')] : []),
       c.mode === 'dry-run'
         ? chip('dry-run (no Home Assistant)', 'warn')
         : chip(c.ha_connected ? 'home assistant: connected' : 'home assistant: ' + (c.ha_error || 'connecting…'),

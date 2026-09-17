@@ -51,6 +51,7 @@ class Tunable:
 PAIRED = (
     ("knob.engage_pinch", "knob.release_pinch", 0.05),
     ("gate.depth_min_m", "gate.depth_max_m", 0.2),
+    ("presence.off_frac", "presence.on_frac", 0.002),
 )
 
 TUNABLES: tuple[Tunable, ...] = (
@@ -258,6 +259,58 @@ TUNABLES: tuple[Tunable, ...] = (
         "capped (KK_EXPOSURE) to prevent motion blur, which darkens the "
         "image. No effect on bright scenes or in IR night mode.",
         "bool", "Performance",
+    ),
+    # ------------------------------------------------ presence / idling
+    Tunable(
+        "presence.enabled", "Idle when the room is empty",
+        "Pause hand tracking while nobody is in front of the camera, and wake "
+        "it the moment somebody is. Hand landmarking is most of the work this "
+        "app does and an empty room does not gesture. The camera keeps "
+        "streaming either way — whiteboard-sync photographs the boards "
+        "through it exactly when nobody is home — so this saves the GPU/CPU "
+        "work, not the sensor.",
+        "bool", "Presence",
+    ),
+    Tunable(
+        "presence.on_frac", "Wake sensitivity",
+        "How much of the view must be occupied by something that is not part "
+        "of the empty room before presence turns ON, as a fraction of the "
+        "pixels the depth camera can see. A person standing in frame reads "
+        "tens of percent, so the default 0.02 wakes well before you are close "
+        "enough to gesture. Raise it if a pet or a swinging door wakes the "
+        "pipeline; the live reading is 'occupancy' in /api/presence.",
+        "float", "Presence", 0.002, 0.20, 0.002,
+    ),
+    Tunable(
+        "presence.off_frac", "Sleep sensitivity",
+        "Occupancy must fall below this before the room counts as empty "
+        "again. Kept under the wake threshold (hysteresis) so somebody "
+        "sitting at the edge of the useful range can't flap the pipeline on "
+        "and off.",
+        "float", "Presence", 0.001, 0.15, 0.001,
+    ),
+    Tunable(
+        "presence.linger_s", "Stay awake for",
+        "How long presence survives after the last time somebody was seen. "
+        "This is deliberately generous: stepping out of frame for a moment "
+        "does not mean you have left, and it is also what whiteboard-sync "
+        "reads to decide a board is safe to photograph.",
+        "float", "Presence", 0.0, 120.0, 1.0, "s",
+    ),
+    Tunable(
+        "presence.fg_gap_m", "Foreground depth gap",
+        "How far in front of the learned empty scene something must sit "
+        "before it counts as 'something new'. Lower sees more (and picks up "
+        "depth noise on distant walls); higher only notices objects well "
+        "clear of the background.",
+        "float", "Presence", 0.05, 1.0, 0.05, "m",
+    ),
+    Tunable(
+        "presence.far_m", "Presence range",
+        "Ignore anything beyond this distance when judging presence — set it "
+        "just past the far wall of the room you care about so the hallway "
+        "behind you never counts as company.",
+        "float", "Presence", 1.0, 8.0, 0.5, "m",
     ),
     # ------------------------------------------------ swipe
     Tunable(

@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 
 from ..config import CaptureConfig
-from .base import CaptureBase, CaptureError
+from .base import CaptureBase, CaptureError, DeviceAbsent
 
 log = logging.getLogger("kk.cap")
 
@@ -51,9 +51,19 @@ def create_capture(cfg: CaptureConfig) -> CaptureBase:
         if detected:
             log.info("auto-detected %s on the USB bus", detected)
             backend = detected
-        else:
+        elif cfg.auto_fallback:
             log.warning("no Kinect found on the USB bus — falling back to webcam")
             backend = "webcam"
+        else:
+            # Not an error to exit over: the sensor re-enumerates after USB
+            # stalls and host sleeps, so the caller waits for it instead of
+            # power-cycling the container once a minute forever.
+            raise DeviceAbsent(
+                "no Kinect on the USB bus (looked for 045e:02c4/02d8 for a v2, "
+                "045e:02ae/02bf for a v1). Check the Kinect Adapter for Windows "
+                "is powered and in a USB 3.0 port; set KK_AUTO_FALLBACK=true to "
+                "fall back to a webcam instead of waiting."
+            )
 
     if backend == "kinect1":
         from .kinect_v1 import KinectV1Capture
@@ -67,4 +77,5 @@ def create_capture(cfg: CaptureConfig) -> CaptureBase:
     raise CaptureError(f"unknown capture backend: {cfg.backend!r}")
 
 
-__all__ = ["CaptureBase", "CaptureError", "create_capture", "detect_kinect"]
+__all__ = ["CaptureBase", "CaptureError", "DeviceAbsent", "create_capture",
+           "detect_kinect"]

@@ -51,8 +51,15 @@ def create_app(
     @app.get("/healthz")
     async def healthz():
         if shared.healthy():
-            return {"status": "ok"}
-        return JSONResponse({"status": "no frames"}, status_code=503)
+            return {"status": "idle" if shared.idle else "ok"}
+        if shared.camera == "absent":
+            # Deliberately waiting for a camera that is not on the bus. The
+            # process is fine and restarting it changes nothing — flagging
+            # this unhealthy only adds noise to an already-known problem.
+            return {"status": "waiting for camera",
+                    "detail": shared.camera_detail}
+        return JSONResponse({"status": "no frames", "camera": shared.camera},
+                            status_code=503)
 
     @app.get("/api/state")
     async def state():
@@ -139,6 +146,50 @@ def create_app(
             headers={"X-Snapshot-Mode": mode,
                      "X-Snapshot-Frames": str(frames if mode == "stacked" else 1)},
         )
+
+    @app.get("/api/presence")
+    async def presence(x1: int = -1, y1: int = -1, x2: int = -1, y2: int = -1):
+        """Is a human here, and/or in front of a given rectangle?
+
+        With no arguments: whole-scene presence, the same verdict that gates
+        this app's own hand tracking. ``present`` is hysteresis-and-linger
+        applied to ``occupancy``, so it stays true through the moment somebody
+        steps briefly out of frame — which is exactly the moment a whiteboard
+        photo would catch half a person.
+
+        With a region (UNMIRRORED full-res colour coordinates, the frame
+        ``/api/snapshot`` serves and ``/api/region_depth`` accepts): the
+        fraction of that rectangle sitting in front of its learned empty
+        plane. This is the measurement region_depth cannot make — percentiles
+        within a single frame need roughly 10% coverage before they move, and
+        a head in front of a whiteboard covers a few percent. Time-of-flight
+        and self-illuminated, so it answers day or pitch-black night.
+        """
+        out = shared.presence_dict()
+        if min(x1, y1, x2, y2) >= 0:
+            if shared.region_occupancy_fn is None:
+                return JSONResponse(
+                    {"error": "region occupancy not supported by this backend"},
+                    status_code=404)
+            loop = asyncio.get_running_loop()
+            region = await loop.run_in_executor(
+                None, shared.region_occupancy_fn, x1, y1, x2, y2)
+            if region is None:
+                return JSONResponse({"error": "no aligned depth yet", **out},
+                                    status_code=404)
+            out["region"] = region
+        return out
+
+    @app.post("/api/presence/relearn")
+    async def presence_relearn():
+        """Forget the learned empty-scene models. Call after the camera or the
+        furniture moves — until then a shifted chair reads as a person."""
+        if shared.presence is not None:
+            shared.presence.force_relearn()
+        if shared.relearn_fn is not None:
+            shared.relearn_fn()
+        log.info("presence: background models cleared by request")
+        return {"ok": True}
 
     @app.get("/api/region_depth")
     async def region_depth(x1: int, y1: int, x2: int, y2: int):

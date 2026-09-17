@@ -56,6 +56,18 @@ services:
       # Crop-in zoom onto the frame centre (1.0 = full view); usually set
       # from the dashboard slider instead.
       - KK_CROP=${KK_CROP:-1.0}
+      # No Kinect on the USB bus: false (default) waits in-process for it to
+      # come back, true falls back to a webcam. The fallback on a host with no
+      # webcam is what made a vanished Kinect a 61s container boot loop.
+      - KK_AUTO_FALLBACK=${KK_AUTO_FALLBACK:-false}
+      # -- Presence -----------------------------------------------------------
+      # Pause hand tracking while the room is empty (the camera keeps
+      # streaming — whiteboard-sync photographs the boards through it exactly
+      # when nobody is home). Tune the rest from the dashboard.
+      - KK_PRESENCE_ENABLED=${KK_PRESENCE_ENABLED:-true}
+      - KK_PRESENCE_LINGER_S=${KK_PRESENCE_LINGER_S:-20}
+      - KK_PRESENCE_ON_FRAC=${KK_PRESENCE_ON_FRAC:-0.02}
+      - KK_PRESENCE_FAR_M=${KK_PRESENCE_FAR_M:-5.0}
       # -- Gestures -----------------------------------------------------------
       - KK_SWIPE_ENABLED=${KK_SWIPE_ENABLED:-true}
       - KK_INVERT_SWIPE=${KK_INVERT_SWIPE:-false}

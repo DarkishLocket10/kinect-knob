@@ -44,6 +44,33 @@ class CaptureConfig:
     logo_led: int = 0
     low_light_boost: bool = True        # auto-gamma brighten dim frames before tracking
     crop: float = 1.0                   # crop-in zoom onto the frame centre (1.0 = full view, 2.0 = middle half)
+    # When backend=auto finds no Kinect on the USB bus: False (default) waits
+    # in-process for it to appear, True falls back to a webcam. The fallback
+    # is what turned a vanished Kinect into a 61-second container boot loop
+    # on a host with no webcam, so it is opt-in now. See main._acquire_capture.
+    auto_fallback: bool = False
+
+
+@dataclass
+class PresenceConfig:
+    """Is a human in front of the camera? (depth background subtraction)"""
+    enabled: bool = True                # gate the expensive pipeline on presence
+    near_m: float = 0.4                 # ignore returns nearer than this (lens smudge, cables)
+    far_m: float = 5.0                  # ignore returns beyond this (the far wall, the hallway)
+    fg_gap_m: float = 0.25              # this much in front of the learned empty scene = foreground
+    on_frac: float = 0.020              # occupancy that turns presence ON
+    off_frac: float = 0.010             # occupancy it must fall under to turn OFF (hysteresis)
+    linger_s: float = 20.0              # stay "present" this long after last being seen
+    warmup_s: float = 3.0               # ignore verdicts while the background model seeds
+    probe_s: float = 0.5                # seconds between probes while active
+    idle_probe_s: float = 0.5           # seconds between probes while idle
+    region_gap_m: float = 0.25          # foreground gap for REGION queries (whiteboard halves)
+    # A scene that has not moved AT ALL for this long is furniture, not a
+    # person, and gets absorbed into the empty-scene model. Motion resets the
+    # clock, which is what keeps somebody sitting still at a whiteboard from
+    # being quietly built into the wall. See presence.DepthPresence._adapt.
+    static_absorb_s: float = 300.0
+    region_static_absorb_s: float = 900.0
 
 
 @dataclass
@@ -115,6 +142,7 @@ class AppConfig:
     ha: HAConfig = field(default_factory=HAConfig)
     capture: CaptureConfig = field(default_factory=CaptureConfig)
     gate: GateConfig = field(default_factory=GateConfig)
+    presence: PresenceConfig = field(default_factory=PresenceConfig)
     knob: KnobConfig = field(default_factory=KnobConfig)
     swipe: SwipeConfig = field(default_factory=SwipeConfig)
     playpause: PlayPauseConfig = field(default_factory=PlayPauseConfig)
@@ -142,6 +170,11 @@ _ENV_MAP: dict[str, tuple[str, str, str]] = {
     "KK_LOGO_LED": ("capture", "logo_led", "int"),
     "KK_LOW_LIGHT_BOOST": ("capture", "low_light_boost", "bool"),
     "KK_CROP": ("capture", "crop", "float"),
+    "KK_AUTO_FALLBACK": ("capture", "auto_fallback", "bool"),
+    "KK_PRESENCE_ENABLED": ("presence", "enabled", "bool"),
+    "KK_PRESENCE_LINGER_S": ("presence", "linger_s", "float"),
+    "KK_PRESENCE_ON_FRAC": ("presence", "on_frac", "float"),
+    "KK_PRESENCE_FAR_M": ("presence", "far_m", "float"),
     "KK_USE_DEPTH": ("gate", "use_depth", "bool"),
     "KK_DEPTH_MIN_M": ("gate", "depth_min_m", "float"),
     "KK_DEPTH_MAX_M": ("gate", "depth_max_m", "float"),

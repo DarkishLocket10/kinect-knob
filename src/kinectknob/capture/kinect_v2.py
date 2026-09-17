@@ -38,8 +38,9 @@ import cv2
 import numpy as np
 
 from ..config import CaptureConfig
+from ..presence import RegionPresence
 from ..types import Frame
-from .base import CaptureBase, CaptureError
+from .base import CaptureBase, CaptureError, DeviceAbsent
 from .ir import IrAutoSwitch, ir_to_rgb
 from .kv2_stream import LatestQueueListener, read_latest
 
@@ -47,6 +48,16 @@ log = logging.getLogger("kk.cap.k2")
 
 _FRAME_TIMEOUT_S = 5.0     # no frames for this long -> declare the device stalled
 _DEPTH_EVERY_N = 2         # run registration on every Nth frame, cache between
+# While nobody is present the depth map only feeds the presence probe and the
+# whiteboard obstruction check, both of which are happy at a couple of Hz —
+# and registration is the most expensive per-frame step in the backend. The
+# COLOR stream keeps running at full rate regardless: /api/snapshot serves
+# whiteboard-sync exactly when the room is empty.
+_DEPTH_IDLE_N = 15
+# How far in front of the learned board/wall plane counts as "something is
+# there" for region occupancy queries. Overridden from PresenceConfig at
+# startup via set_region_gap_mm().
+_REGION_GAP_MM = 250.0
 
 
 def _fix_frame_create_leak() -> None:
@@ -81,6 +92,7 @@ class KinectV2Capture(CaptureBase):
     def __init__(self, cfg: CaptureConfig):
         self.cfg = cfg
         self._seq = 0
+        self._active = True        # vision pipeline is consuming frames for real
         try:
             from freenect2 import Device, FrameType  # noqa: F401
         except ImportError as exc:
@@ -122,16 +134,35 @@ class KinectV2Capture(CaptureBase):
         # ToF sensor self-illuminates, so this stays valid in a dark room.
         self._board_depth: Optional[np.ndarray] = None
         self._board_depth_t = 0.0
+        # Occupancy of arbitrary regions of that aligned map, against a
+        # learned board/wall plane. This is the signal whiteboard-sync needs:
+        # a head leaning in front of a board covers a few percent of the
+        # region, which shows up here and never moved the old percentile test.
+        self._region_presence = RegionPresence(
+            fg_gap_mm=_REGION_GAP_MM, decim=4, min_interval_s=1.0)
         # ir_mode is fixed for the process lifetime, so the needed-frames set is too.
         need_ir = cfg.ir_mode != "off"
         self._needed = frozenset(
             {FrameType.Color, FrameType.Depth} | ({FrameType.Ir} if need_ir else set())
         )
 
+    def set_active(self, active: bool) -> None:
+        """Throttle depth registration while the room is empty (see
+        _DEPTH_IDLE_N). Never touches the color stream."""
+        self._active = bool(active)
+
     def start(self) -> None:
         try:
             self._device = self._Device()
         except Exception as exc:  # noqa: BLE001
+            from . import detect_kinect
+
+            if detect_kinect() != "kinect2":
+                # Gone from the bus entirely: the caller waits for it rather
+                # than exiting into a container restart loop.
+                raise DeviceAbsent(
+                    f"Kinect v2 is not on the USB bus ({exc})"
+                ) from exc
             raise CaptureError(
                 "Kinect v2 not found. Check: Kinect Adapter for Windows powered, "
                 "plugged into a USB 3.0 port (Intel/Renesas controller — ASMedia "
@@ -257,13 +288,26 @@ class KinectV2Capture(CaptureBase):
         target_w = self.cfg.proc_width
         scale = target_w / raw.shape[1]
         size = (target_w, int(round(raw.shape[0] * scale)))
-        small = cv2.resize(raw, size, interpolation=cv2.INTER_AREA)
+        if self._active:
+            small = cv2.resize(raw, size, interpolation=cv2.INTER_AREA)
+        else:
+            # Idle: nothing consumes this image (the vision loop skips the
+            # tracker entirely), so pay for a strided decimation instead of a
+            # proper area-average resample. Same shape and dtype, so the frame
+            # contract is unchanged and the first frame after waking is full
+            # quality again — only the sampling is cruder while nobody is
+            # looking. Depth and the full-res snapshot path are untouched.
+            step = max(1, raw.shape[1] // target_w)
+            small = np.ascontiguousarray(raw[::step, ::step])
+            if small.shape[1] != size[0]:
+                small = cv2.resize(small, size, interpolation=cv2.INTER_NEAREST)
         if fmt == "RGBX":
             rgb = cv2.cvtColor(small, cv2.COLOR_RGBA2RGB)
         else:
             rgb = cv2.cvtColor(small, cv2.COLOR_BGRA2RGB)
 
-        if self._seq % _DEPTH_EVERY_N == 0 or self._depth_cache is None:
+        every_n = _DEPTH_EVERY_N if self._active else _DEPTH_IDLE_N
+        if self._seq % every_n == 0 or self._depth_cache is None:
             try:
                 _, _, big_depth = self._device.registration.apply(
                     color, depth, with_big_depth=True
@@ -272,6 +316,7 @@ class KinectV2Capture(CaptureBase):
                 aligned = big[1:-1, :]               # rows align with color
                 self._board_depth = aligned.copy()   # full-res, for region_depth
                 self._board_depth_t = time.time()
+                self._region_presence.update(aligned)
                 depth_small = cv2.resize(aligned, size, interpolation=cv2.INTER_NEAREST)
                 self._depth_cache = np.nan_to_num(
                     depth_small, copy=False, nan=0.0, posinf=0.0, neginf=0.0
@@ -403,8 +448,10 @@ class KinectV2Capture(CaptureBase):
                 color, depth, with_big_depth=True
             )
             big = big_depth.to_array()
-            self._board_depth = big[1:-1, :].copy()
+            aligned = big[1:-1, :]
+            self._board_depth = aligned.copy()
             self._board_depth_t = time.time()
+            self._region_presence.update(aligned)
         except Exception:  # noqa: BLE001 — stats endpoint just stays stale
             log.debug("board-depth registration failed", exc_info=True)
 
@@ -433,6 +480,31 @@ class KinectV2Capture(CaptureBase):
             out.update(p05_mm=int(p[0]), p10_mm=int(p[1]),
                        p50_mm=int(p[2]), p90_mm=int(p[3]))
         return out
+
+    def region_occupancy(self, x1: int, y1: int, x2: int, y2: int) -> Optional[dict]:
+        """What FRACTION of this region has something in front of its learned
+        plane — the sensitive companion to region_depth.
+
+        region_depth compares percentiles within one frame, so it only fires
+        when an object covers ≥10% of the region; a head in front of a
+        whiteboard half does not, which is how partially-occluded lines kept
+        reaching the transcriber. This compares against the empty board plane
+        instead, so a few percent of coverage is plainly visible. Same
+        UNMIRRORED full-res colour coordinates as region_depth."""
+        return self._region_presence.occupancy(x1, y1, x2, y2)
+
+    def set_region_gap_mm(self, mm: float, static_absorb_s: float | None = None) -> None:
+        """Set the plane clearance that counts as occupied for region queries
+        (PresenceConfig.region_gap_m) and, optionally, how long something has
+        to sit perfectly still before it joins the board plane."""
+        self._region_presence.fg_gap_mm = float(mm)
+        if static_absorb_s is not None:
+            self._region_presence.static_absorb_s = float(static_absorb_s)
+
+    def relearn_regions(self) -> None:
+        """Forget the learned board/wall plane (call after the furniture or
+        the camera moves)."""
+        self._region_presence.force_relearn()
 
     def _ir_frame(self, ir, depth, t: float) -> Frame:
         """Night mode: track on the tone-mapped IR image. IR and depth come off
