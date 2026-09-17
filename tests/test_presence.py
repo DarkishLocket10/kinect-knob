@@ -288,3 +288,41 @@ def test_dashboard_tuning_applies_without_a_restart():
     det.update(body, t + 0.5)
     assert det.present is True
     assert det.snapshot()["on_frac"] == 0.02
+
+
+def test_depth_dropouts_do_not_poison_the_maths():
+    """The sensor returns NaN and inf where it got nothing back. Those pixels
+    are masked out of every verdict, but they must not reach the arithmetic
+    either: inf - inf is a NaN and a RuntimeWarning on every probe."""
+    import warnings
+
+    det = DepthPresence(warmup_s=0.0, linger_s=5.0)
+    holes = wall()
+    holes[0:10, :] = np.nan
+    holes[10:20, :] = np.inf
+    holes[20:30, :] = 0.0                 # the other "no return" convention
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")    # any RuntimeWarning fails the test
+        res, t = settle(det, holes, 0.0, 6)
+        assert det.present is False
+        body = with_body(holes)
+        res = det.update(body, t)
+    assert res.occupancy > 0.2
+    assert det.present is True
+    assert res.valid_frac < 1.0           # the holes are still reported as holes
+
+
+def test_region_occupancy_survives_depth_dropouts():
+    import warnings
+
+    rp = RegionPresence(fg_gap_mm=250.0, min_interval_s=0.0)
+    scene = board_scene()
+    scene[0:40, :] = np.nan
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        rp.update(scene, now=0.0)
+        blocked = scene.copy()
+        blocked[300:700, 1920 - 900:1920 - 500] = 1200.0
+        rp.update(blocked, now=1.0)
+        out = rp.occupancy(100, 200, 960, 800)
+    assert out["occupancy"] > 0.05

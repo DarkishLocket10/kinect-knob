@@ -225,6 +225,12 @@ class DepthPresence:
         if n_valid == 0:
             return self._publish(0.0, 0.0, None, now, measured=False)
         valid_frac = n_valid / d.size
+        # The sensor emits NaN and +/-inf for pixels with no return. Every
+        # mask below excludes them, so results were already correct — but the
+        # frame-to-frame subtraction in _static_for runs before masking, and
+        # inf - inf is a NaN and a RuntimeWarning per probe. Normalise once
+        # here instead of defending in four places.
+        d = np.where(valid, d, 0.0)
 
         with self._lock:
             if self._bg is None or self._bg_shape != d.shape:
@@ -377,6 +383,7 @@ class RegionPresence:
         valid = np.isfinite(d) & (d > 0)
         if not valid.any():
             return
+        d = np.where(valid, d, 0.0)   # see DepthPresence.update
         with self._lock:
             if self._bg is None or self._shape != full_shape:
                 self._bg = np.where(valid, d, 0.0).astype(np.float32)
