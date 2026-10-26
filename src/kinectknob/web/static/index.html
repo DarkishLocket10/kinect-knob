@@ -103,7 +103,8 @@
       <div class="card" style="margin-bottom:16px">
         <h2>Live tracking</h2>
         <table id="stats"></table>
-        <div class="btns"><button id="streamBtn" onclick="toggleStream()">Show camera debug view</button></div>
+        <div class="btns"><button id="streamBtn" onclick="toggleStream()">Show camera debug view</button>
+          <button id="restartBtn" onclick="restartCamera()" title="Close the Kinect and reopen it from scratch">Restart camera</button></div>
         <img id="stream" alt="debug stream">
       </div>
       <div class="card">
@@ -143,6 +144,12 @@ async function act(action) {
                                body: JSON.stringify({action}) });
 }
 
+async function restartCamera() {
+  const r = await fetch('/api/camera/restart', { method: 'POST' });
+  $('restartBtn').textContent = r.ok ? 'Restarting…' : 'Not now (camera ' + ((await r.json()).camera) + ')';
+  setTimeout(() => { $('restartBtn').textContent = 'Restart camera'; }, 4000);
+}
+
 function fmt(v, suffix='') { return (v === null || v === undefined) ? '—' : v + suffix; }
 
 async function tick() {
@@ -154,8 +161,10 @@ async function tick() {
     // the difference is the whole point of presence gating — label it.
     const cam = s.camera === 'absent'
       ? chip('camera: waiting (' + Math.round(s.camera_waiting_s || 0) + 's)', 'err')
+      : s.camera === 'off'
+        ? chip('camera: off until ' + ((s.schedule && s.schedule.next_change) || '').slice(11, 16), 'warn')
       : s.camera === 'error'
-        ? chip('camera: error', 'err')
+        ? chip('camera: ' + (s.camera_detail.startsWith('recovering') ? 'recovering' : 'error'), 'err')
         : chip('camera: ' + s.backend, (s.fps > 5 || s.idle) ? 'on' : 'err');
     const pres = s.presence && s.presence.ready
       ? chip(s.presence.present
@@ -171,6 +180,8 @@ async function tick() {
       chip(s.has_depth ? 'depth: on' : 'depth: none', s.has_depth ? 'on' : 'warn'),
       ...(s.ir_active ? [chip('IR night mode', 'on')] : []),
       ...(s.recycles ? [chip('camera recycled ' + s.recycles + 'x', 'warn')] : []),
+      ...(s.schedule && s.schedule.off_window && s.camera !== 'off'
+          ? [chip('off ' + s.schedule.off_window)] : []),
       c.mode === 'dry-run'
         ? chip('dry-run (no Home Assistant)', 'warn')
         : chip(c.ha_connected ? 'home assistant: connected' : 'home assistant: ' + (c.ha_error || 'connecting…'),

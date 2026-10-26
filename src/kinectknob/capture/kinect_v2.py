@@ -40,7 +40,7 @@ import numpy as np
 from ..config import CaptureConfig
 from ..presence import RegionPresence
 from ..types import Frame
-from .base import CaptureBase, CaptureError, DeviceAbsent
+from .base import CaptureBase, CaptureError, DeviceAbsent, DeviceWedged
 from .ir import IrAutoSwitch, ir_to_rgb
 from .kv2_stream import LatestQueueListener, read_latest
 
@@ -85,6 +85,25 @@ def _fix_frame_create_leak() -> None:
     log.info("patched freenect2.Frame.create with gc-managed allocation (leak fix)")
 
 
+def _dispose_freenect2_context() -> None:
+    """Destroy the binding's process-wide ``Freenect2`` context (a module
+    global it creates once, enumerates once and never refreshes). Its
+    destructor deletes any device objects still registered — taking their
+    OpenCL pipelines with them — and calls libusb_exit; the next Device()
+    builds a fresh context and re-enumerates the bus. Only call with no live
+    Device: the binding's Device objects hold raw pointers into it."""
+    import freenect2
+
+    ctx = getattr(freenect2, "_FREENECT2_SINGLETON", None)
+    if ctx is None:
+        return
+    freenect2._FREENECT2_SINGLETON = None
+    try:
+        freenect2.ffi.release(ctx)   # run freenect2_dispose now, not at GC time
+    except Exception:  # noqa: BLE001
+        log.debug("freenect2 context release raised", exc_info=True)
+
+
 class KinectV2Capture(CaptureBase):
     name = "kinect2"
     has_depth = True
@@ -107,7 +126,8 @@ class KinectV2Capture(CaptureBase):
         self._FrameType = FrameType
         self._NoFrame = NoFrameReceivedError
         self._device = None
-        self._running_ctx = None
+        self._streaming = False    # libfreenect2 confirmed start(); stop() is meaningful
+        self._wedged = False       # start() failed half-way: never close (see DeviceWedged)
         self._latest: dict = {}
         self._ir_switch = IrAutoSwitch(cfg.ir_mode)
         self._ir_active = self._ir_switch.active
@@ -180,11 +200,27 @@ class KinectV2Capture(CaptureBase):
         self._device._default_listener = self._listener
         self._device.color_frame_listener = self._listener
         self._device.ir_and_depth_frame_listener = self._listener
-        self._running_ctx = self._device.running()
-        self._running_ctx.__enter__()
+        self._start_streams()
         log.info("Kinect v2 streaming (1080p color + ToF depth, GPU depth pipeline)")
         self._apply_exposure()
         self._apply_logo_led()
+
+    def _start_streams(self) -> None:
+        """Device.start() minus the binding's habit of discarding the result:
+        libfreenect2 returns false when the depth/IR transfers could not be
+        submitted ("all submissions failed"), and that device is wedged."""
+        from freenect2 import lib
+
+        dev = self._device
+        if not lib.freenect2_device_start(dev._c_object):
+            self._wedged = True
+            raise DeviceWedged(
+                "Kinect v2 failed to start its depth/IR streams (all USB "
+                "submissions failed); its colour transfers are stuck in flight")
+        self._streaming = True
+        # What Device.start() would have done: registration needs these.
+        dev.color_camera_params = lib.freenect2_device_get_color_camera_params(dev._c_object)
+        dev.ir_camera_params = lib.freenect2_device_get_ir_camera_params(dev._c_object)
 
     def _apply_logo_led(self) -> None:
         """Dim/kill the white Xbox-logo indicator LED (must be running).
@@ -517,10 +553,33 @@ class KinectV2Capture(CaptureBase):
         return Frame(rgb=rgb, depth_mm=depth_mm, t=t, seq=self._seq, ir=True)
 
     def stop(self) -> None:
-        if self._running_ctx is not None:
-            try:
-                self._running_ctx.__exit__(None, None, None)
-            except Exception:  # noqa: BLE001
-                pass
-            self._running_ctx = None
+        """Stop streaming, CLOSE the device and drop the libusb context.
+
+        Stopping alone is not a teardown. The binding's Device has no
+        finaliser, so a device that is never close()d stays in libfreenect2's
+        open-device list with its interfaces claimed — and the next
+        Device() is handed that same stale object back ("device @4:5 is
+        already be open!"), which is why every in-process recycle before
+        2026-10-26 failed within seconds (LIBUSB_ERROR_BUSY / "all
+        submissions failed") and burned the recycle budget into a container
+        restart. Disposing the context as well makes the next open a genuine
+        fresh start: new libusb context, fresh enumeration, libfreenect2's
+        USB reset on open, and a new OpenCL pipeline instead of one leaked
+        per recycle."""
+        if self._wedged:
+            return   # unsafe to touch (see DeviceWedged); the process is exiting
+        dev, streaming = self._device, self._streaming
         self._device = None
+        self._streaming = False
+        if dev is not None and streaming:
+            try:
+                dev.stop()
+            except Exception:  # noqa: BLE001 — stopping a dead device
+                log.debug("device stop raised", exc_info=True)
+        if dev is not None:
+            try:
+                dev.close()
+            except Exception:  # noqa: BLE001
+                log.debug("device close raised", exc_info=True)
+        self._listener = None
+        _dispose_freenect2_context()

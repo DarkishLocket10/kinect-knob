@@ -9,3 +9,5 @@ PyYAML>=6.0
 # Needed by the freenect2 (Kinect v2) cffi binding at runtime; harmless elsewhere.
 cffi>=1.16
 Pillow>=10
+# IANA zones for the camera off window (KK_TZ) — the base image ships no tzdata.
+tzdata>=2024.1

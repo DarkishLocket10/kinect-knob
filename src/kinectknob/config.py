@@ -138,6 +138,15 @@ class WebConfig:
 
 
 @dataclass
+class ScheduleConfig:
+    # Daily camera-off window "HH:MM-HH:MM" (may cross midnight); empty = always
+    # on. The camera is stopped and closed for the window and the process
+    # restarts fresh when it ends — see schedule.py.
+    off_window: str = ""
+    tz: str = "America/New_York"
+
+
+@dataclass
 class AppConfig:
     ha: HAConfig = field(default_factory=HAConfig)
     capture: CaptureConfig = field(default_factory=CaptureConfig)
@@ -147,6 +156,7 @@ class AppConfig:
     swipe: SwipeConfig = field(default_factory=SwipeConfig)
     playpause: PlayPauseConfig = field(default_factory=PlayPauseConfig)
     web: WebConfig = field(default_factory=WebConfig)
+    schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     model_path: str = "models/hand_landmarker.task"
     num_hands: int = 2
     mp_delegate: str = "cpu"            # hand landmarker inference: cpu | gpu
@@ -188,6 +198,8 @@ _ENV_MAP: dict[str, tuple[str, str, str]] = {
     "KK_PLAYPAUSE_ENABLED": ("playpause", "enabled", "bool"),
     "KK_PLAYPAUSE_POSE": ("playpause", "pose", "str"),
     "KK_PORT": ("web", "port", "int"),
+    "KK_OFF_WINDOW": ("schedule", "off_window", "str"),
+    "KK_TZ": ("schedule", "tz", "str"),
     "KK_DEBUG_STREAM": ("web", "debug_stream", "bool"),
     "KK_MODEL_PATH": ("", "model_path", "str"),
     "KK_NUM_HANDS": ("", "num_hands", "int"),
@@ -293,6 +305,8 @@ def load_config(path: Optional[str] = None) -> AppConfig:
     cfg.mp_delegate = cfg.mp_delegate.strip().lower()
     if cfg.mp_delegate not in ("cpu", "gpu"):
         raise ValueError(f"mp_delegate must be cpu|gpu, got {cfg.mp_delegate!r}")
+    from .schedule import OffWindow
+    OffWindow(cfg.schedule.off_window, cfg.schedule.tz)  # fail fast on a bad spec / zone
     if not cfg.ha.media_entity:
         cfg.ha.media_entity = cfg.ha.volume_entity
     cfg.ha.max_volume = min(max(cfg.ha.max_volume, 0.0), 1.0)

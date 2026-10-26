@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 
 from ..config import CaptureConfig
-from .base import CaptureBase, CaptureError, DeviceAbsent
+from .base import CaptureBase, CaptureError, DeviceAbsent, DeviceWedged
 
 log = logging.getLogger("kk.cap")
 
@@ -77,5 +77,5 @@ def create_capture(cfg: CaptureConfig) -> CaptureBase:
     raise CaptureError(f"unknown capture backend: {cfg.backend!r}")
 
 
-__all__ = ["CaptureBase", "CaptureError", "DeviceAbsent", "create_capture",
+__all__ = ["CaptureBase", "CaptureError", "DeviceAbsent", "DeviceWedged", "create_capture",
            "detect_kinect"]

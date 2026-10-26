@@ -28,6 +28,21 @@ different answers:
   ``_RECYCLE_WINDOW_S``. Now the USB stack itself is suspect, so exit non-zero
   and let the container restart policy power-cycle everything, as before.
 
+A recycle is a real teardown since 2026-10-26: the capture thread is joined,
+then the device is closed and the libusb context disposed (see
+``KinectV2Capture.stop``), and the reopen waits a growing back-off. Before
+that the reopen was handed the same half-dead device and failed within
+seconds, so every stall cascaded into a container restart — and every restart
+flashes the sensor.
+
+Scheduled off window
+--------------------
+``schedule.off_window`` (``KK_OFF_WINDOW``, e.g. ``20:00-06:30`` in
+``KK_TZ``): the camera is stopped and closed for the window; the web server
+stays up and reports ``camera: "off"``. When the window ends the process
+exits 0 so the container restarts it fresh — a clean daily restart of
+libusb, OpenCL and MediaPipe, so nothing compounds across days.
+
 Presence gating
 ---------------
 Hand landmarking is the expensive half of the pipeline and it is pointless in
@@ -39,6 +54,7 @@ home — but the backend throttles depth registration while idle.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import signal
 import sys
@@ -50,12 +66,13 @@ from typing import Optional
 
 import numpy as np
 
-from .capture import CaptureError, DeviceAbsent, create_capture
+from .capture import CaptureError, DeviceAbsent, DeviceWedged, create_capture
 from .config import AppConfig
 from .controller import Controller
 from .gestures.engine import GestureEngine
 from .ha.client import HAClient
 from .presence import DepthPresence
+from .schedule import OffWindow
 from .state import SharedState
 from .tuning import Tuning
 from .types import Frame
@@ -68,12 +85,23 @@ MODEL_URL = (
 )
 
 EXIT_CAPTURE_FAILURE = 3
+EXIT_SCHEDULED_RESTART = 0   # end of the off window: restart fresh, not a failure
 
 _ABSENT_POLL_S = 5.0        # how often to re-scan the USB bus while waiting
 _ABSENT_LOG_S = 300.0       # and how often to say so in the log
 _MAX_RECYCLES = 4           # in-process capture recoveries before giving up...
 _RECYCLE_WINDOW_S = 600.0   # ...counted over this rolling window
 _NO_FRAME_TIMEOUT_S = 15.0  # vision loop sees nothing for this long -> recycle
+# Wait before reopening after the Nth failure inside the window. Each open
+# resets the USB device (the sensor's lights flash); a stall straight after a
+# reopen is far likelier while the controller is still unhappy.
+_RECYCLE_BACKOFF_S = (3.0, 10.0, 30.0, 60.0)
+_SCHEDULE_POLL_S = 15.0
+# Capture-failure exits are remembered across restarts so a sensor that keeps
+# wedging backs off (30 s, doubling, max 10 min) instead of restarting — and
+# flashing — every few seconds.
+_EXIT_LOG = Path("/app/data/capture_exits.json")
+_EXIT_MEMORY_S = 1800.0
 
 
 class LatestFrameSlot:
@@ -130,6 +158,18 @@ class App:
         self.shared.presence = self.presence
         self._capture = None
         self._recycles: list[float] = []
+        self.off_window = OffWindow(cfg.schedule.off_window, cfg.schedule.tz)
+        self.shared.schedule_fn = self.off_window.describe
+        self.shared.restart_fn = self.request_restart
+        # Why the current capture generation was ended on purpose (None =
+        # it failed): "schedule" | "requested". Set before cap_stop.
+        self._stop_reason: Optional[str] = None
+        # Learned empty-scene plane for whiteboard region occupancy. Owned
+        # here so it survives in-process recycles: re-seeding it from
+        # whatever is in front of the boards at reopen time (often the user)
+        # would blind the whiteboard obstruction guard.
+        self._region_presence = None
+        self._exit_log = _EXIT_LOG
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     # ------------------------------------------------------------------
@@ -148,12 +188,30 @@ class App:
 
         tracker = HandTracker(self.cfg.model_path, self.cfg.num_hands, self.cfg.mp_delegate)
         engine = GestureEngine(self.cfg)
+        if self.off_window.enabled:
+            log.info("camera off window %s (%s); next change %s",
+                     self.off_window.spec, self.off_window.tz_name,
+                     self.off_window.describe()["next_change"])
+            threading.Thread(target=self._schedule_watch, name="schedule",
+                             daemon=True).start()
+
+        self._cool_down_after_failures()
 
         try:
             while not self.stop_event.is_set():
+                if self.off_window.active():
+                    self._sleep_through_off_window()
+                    if not self.stop_event.is_set():
+                        log.info("off window over — exiting for a clean "
+                                 "scheduled restart")
+                        self.exit_code = EXIT_SCHEDULED_RESTART
+                    break
                 capture = self._acquire_capture()
                 if capture is None:
+                    if self._take_stop_reason() == "schedule":
+                        continue
                     break
+                self._stop_reason = None
                 self.cap_stop = threading.Event()
                 cap_thread = threading.Thread(
                     target=self._capture_loop, args=(capture, self.cap_stop),
@@ -163,16 +221,30 @@ class App:
                     self._vision_loop(tracker, engine)
                 finally:
                     self.cap_stop.set()
+                    self._release_knob(engine)
+                    # Join BEFORE closing: the capture thread must be out of
+                    # read() before the device and its context are destroyed.
+                    # A live stream hands it a frame within ~33 ms; a stalled
+                    # one times out inside read() in <= 5 s.
+                    cap_thread.join(timeout=7)
                     try:
                         capture.stop()
                     except Exception:  # noqa: BLE001 — teardown of a dead device
                         log.debug("capture.stop() raised during recycle", exc_info=True)
-                    cap_thread.join(timeout=5)
                     self._release_capture()
                 if self.stop_event.is_set():
                     break
+                reason = self._take_stop_reason()
+                if reason is not None:
+                    log.info("camera stopped (%s)", reason)
+                    continue
                 if not self._may_recycle():
+                    self._record_failure_exit()
                     break
+                delay = _RECYCLE_BACKOFF_S[min(len(self._recycles),
+                                               len(_RECYCLE_BACKOFF_S)) - 1]
+                self.shared.set_camera("error", f"recovering — reopening in {delay:.0f}s")
+                self.stop_event.wait(delay)
         finally:
             self.stop_event.set()
             tracker.close()
@@ -185,6 +257,81 @@ class App:
             aio.join(timeout=3)
         log.info("shut down (exit code %d)", self.exit_code)
         return self.exit_code
+
+    def _release_knob(self, engine: GestureEngine) -> None:
+        """The camera went away mid-gesture: hand the engine an empty frame so
+        an engaged knob releases now instead of resuming on the next camera."""
+        try:
+            w = self.cfg.capture.proc_width
+            events = engine.update([], time.monotonic(), w, w, None)
+            if events:
+                self.controller.submit(events)
+        except Exception:  # noqa: BLE001
+            log.debug("knob release on camera stop raised", exc_info=True)
+
+    # -- failure exits across restarts -------------------------------------
+    def _recent_failure_exits(self) -> list[float]:
+        try:
+            data = json.loads(self._exit_log.read_text())
+            now = time.time()
+            return [t for t in data.get("exits", []) if now - t < _EXIT_MEMORY_S]
+        except (OSError, ValueError, AttributeError):
+            return []
+
+    def _record_failure_exit(self) -> None:
+        self.exit_code = EXIT_CAPTURE_FAILURE
+        try:
+            exits = self._recent_failure_exits() + [time.time()]
+            self._exit_log.write_text(json.dumps({"exits": exits}))
+        except OSError:
+            log.debug("could not record capture failure exit", exc_info=True)
+
+    def _cool_down_after_failures(self) -> None:
+        n = len(self._recent_failure_exits())
+        if not n:
+            return
+        delay = min(30.0 * 2 ** (n - 1), 600.0)
+        log.warning("%d capture-failure restart(s) in the last %d min — letting "
+                    "the sensor rest %.0f s before opening it", n,
+                    int(_EXIT_MEMORY_S // 60), delay)
+        self.shared.set_camera("error", f"recovering — resting {delay:.0f}s "
+                                        f"after {n} failed restart(s)")
+        self.stop_event.wait(delay)
+
+    # -- schedule / on-demand restart ------------------------------------
+    def _take_stop_reason(self) -> Optional[str]:
+        reason, self._stop_reason = self._stop_reason, None
+        return reason
+
+    def _end_generation(self, reason: str) -> None:
+        self._stop_reason = reason
+        self.cap_stop.set()
+
+    def request_restart(self) -> bool:
+        """Dashboard/API: close and properly reopen the camera now (does not
+        count against the failure budget). Refused inside the off window."""
+        if self.off_window.active():
+            return False
+        log.info("camera restart requested")
+        self._end_generation("requested")
+        return True
+
+    def _schedule_watch(self) -> None:
+        """End the running capture generation when the off window opens."""
+        while not self.stop_event.wait(_SCHEDULE_POLL_S):
+            if self.off_window.active() and self.shared.camera != "off":
+                log.info("off window %s started — stopping the camera",
+                         self.off_window.spec)
+                self._end_generation("schedule")
+
+    def _sleep_through_off_window(self) -> None:
+        until = self.off_window.describe()["next_change"]
+        log.info("camera is OFF until %s (%s) — Kinect stream stopped and "
+                 "device closed", until, self.off_window.tz_name)
+        self.shared.set_camera("off", f"scheduled off until {until}")
+        self.shared.clear_frames()
+        while self.off_window.active() and not self.stop_event.wait(_SCHEDULE_POLL_S):
+            pass
 
     def _install_signal_handlers(self) -> None:
         def handler(signum, _frame):
@@ -206,9 +353,22 @@ class App:
         absent_since: Optional[float] = None
         next_absent_log = 0.0
         while not self.stop_event.is_set():
+            if self.off_window.active():
+                self._stop_reason = "schedule"
+                return None
+            capture = None
             try:
                 capture = create_capture(self.cfg.capture)
                 capture.start()
+            except DeviceWedged as exc:
+                log.critical("%s — exiting so the kernel releases them "
+                             "(container restart reopens it fresh)", exc)
+                self.shared.set_camera("error", str(exc))
+                # Keep the half-started device (and the frame listeners its
+                # stuck colour transfers still call into) alive until exit.
+                self._wedged_capture = capture
+                self._record_failure_exit()
+                return None
             except DeviceAbsent as exc:
                 now = time.monotonic()
                 if absent_since is None:
@@ -230,6 +390,7 @@ class App:
                 log.error("capture failed to start: %s", exc)
                 self.shared.set_camera("error", str(exc))
                 if not self._may_recycle():
+                    self._record_failure_exit()
                     return None
                 self.stop_event.wait(delay)
                 delay = min(delay * 2, 30.0)
@@ -238,6 +399,7 @@ class App:
                 log.exception("capture failed to start unexpectedly")
                 self.shared.set_camera("error", "unexpected backend failure")
                 if not self._may_recycle():
+                    self._record_failure_exit()
                     return None
                 self.stop_event.wait(delay)
                 delay = min(delay * 2, 30.0)
@@ -262,6 +424,11 @@ class App:
         self.shared.region_depth_fn = getattr(capture, "region_depth", None)
         self.shared.region_occupancy_fn = getattr(capture, "region_occupancy", None)
         self.shared.relearn_fn = getattr(capture, "relearn_regions", None)
+        if hasattr(capture, "_region_presence"):
+            if self._region_presence is None:
+                self._region_presence = capture._region_presence
+            else:
+                capture._region_presence = self._region_presence
         if hasattr(capture, "set_region_gap_mm"):
             capture.set_region_gap_mm(self.cfg.presence.region_gap_m * 1000.0,
                                       self.cfg.presence.region_static_absorb_s)
@@ -271,14 +438,18 @@ class App:
     def _release_capture(self) -> None:
         self._capture = None
         self.slot.clear()
+        # Never serve a closed camera's last frame as a current photo.
+        self.shared.clear_frames()
         self.shared.photo_fn = None
         self.shared.ir_photo_fn = None
         self.shared.region_depth_fn = None
         self.shared.region_occupancy_fn = None
         self.shared.relearn_fn = None
-        # The background models describe a scene this camera generation saw;
-        # a re-enumerated sensor can land with a different alignment.
-        self.presence.force_relearn()
+        # The background models are deliberately KEPT across recycles: it is
+        # the same sensor on the same mount with the same factory
+        # registration, and relearning means re-seeding the empty scene from
+        # whoever is in front of it right now. POST /api/presence/relearn is
+        # the explicit reset after the camera or furniture actually moves.
 
     def _may_recycle(self) -> bool:
         """Record a capture failure and decide whether to try again in-process.
@@ -309,6 +480,8 @@ class App:
                 frame = capture.read()
                 if frame is None:
                     continue
+                if cap_stop.is_set():
+                    break   # a stopped generation must never publish over the next
                 if mirror:
                     # cv2.flip is a plain SIMD copy — ~3x faster than
                     # materialising a negative-stride numpy view.
@@ -320,10 +493,14 @@ class App:
                     self.shared.update_fullres(frame.fullres)
                 self.slot.put(frame)
         except CaptureError as exc:
+            if cap_stop.is_set():
+                return   # torn down underneath us on purpose
             log.critical("capture device failed: %s", exc)
             self.shared.set_camera("error", str(exc))
             cap_stop.set()
         except Exception:  # noqa: BLE001
+            if cap_stop.is_set():
+                return
             log.exception("capture thread crashed")
             self.shared.set_camera("error", "capture thread crashed")
             cap_stop.set()

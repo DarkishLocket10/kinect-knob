@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 
 import cv2
@@ -44,6 +45,17 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(title="kinect-knob", docs_url=None, redoc_url=None)
 
+    def camera_unavailable() -> JSONResponse | None:
+        """503 for any request that needs a live camera while there is none:
+        scheduled off, absent, recovering. Explicit status, never stale data —
+        whiteboard-sync must be able to tell "can't see" from "saw nothing"."""
+        if shared.camera == "ok":
+            return None
+        return JSONResponse(
+            {"error": f"camera {shared.camera}", "camera": shared.camera,
+             "detail": shared.camera_detail},
+            status_code=503)
+
     @app.get("/")
     async def index():
         return FileResponse(_STATIC / "index.html")
@@ -52,6 +64,9 @@ def create_app(
     async def healthz():
         if shared.healthy():
             return {"status": "idle" if shared.idle else "ok"}
+        if shared.camera == "off":
+            # Scheduled off window: deliberate, the process is fine.
+            return {"status": "scheduled off", "detail": shared.camera_detail}
         if shared.camera == "absent":
             # Deliberately waiting for a camera that is not on the bus. The
             # process is fine and restarting it changes nothing — flagging
@@ -72,6 +87,16 @@ def create_app(
     async def action(req: ActionRequest):
         ok = await controller.manual(req.action)
         return {"ok": ok}
+
+    @app.post("/api/camera/restart")
+    async def camera_restart():
+        """Close the Kinect and reopen it from scratch (fresh libusb context,
+        USB reset). Refused during the scheduled off window."""
+        if shared.restart_fn is None or not shared.restart_fn():
+            return JSONResponse({"ok": False, "camera": shared.camera,
+                                 "detail": shared.camera_detail},
+                                status_code=409)
+        return {"ok": True}
 
     @app.get("/api/tuning")
     async def tuning_get():
@@ -107,6 +132,8 @@ def create_app(
         ``quality`` is the JPEG quality otherwise. ``ir=1`` returns a stacked
         ACTIVE-IR photo instead (512x424 tone-mapped; self-illuminated, so it
         works in a pitch-black room; needs ir_mode != off)."""
+        if (busy := camera_unavailable()) is not None:
+            return busy
         frames = max(1, min(32, frames))
         quality = max(1, min(100, quality))
         fmt = "png" if format.strip().lower() == "png" else "jpeg"
@@ -135,7 +162,9 @@ def create_app(
             if bgr is not None:
                 mode = "stacked"
         if bgr is None:
-            bgr, _ = shared.fullres()
+            bgr, t_frame = shared.fullres()
+            if bgr is not None and time.monotonic() - t_frame > 5.0:
+                bgr = None   # the camera stopped feeding us: never serve a stale view
         if bgr is None:
             return JSONResponse({"error": "no full-res frame yet"}, status_code=404)
         buf = await loop.run_in_executor(None, _encode_image, bgr, fmt, quality)
@@ -167,6 +196,9 @@ def create_app(
         """
         out = shared.presence_dict()
         if min(x1, y1, x2, y2) >= 0:
+            if shared.camera != "ok":
+                return JSONResponse({"error": f"camera {shared.camera}", **out},
+                                    status_code=503)
             if shared.region_occupancy_fn is None:
                 return JSONResponse(
                     {"error": "region occupancy not supported by this backend"},
@@ -198,6 +230,8 @@ def create_app(
         answers "is something physically in front of the boards" day or
         night, which is a far more reliable obstruction signal than judging
         occlusion from the color image."""
+        if (busy := camera_unavailable()) is not None:
+            return busy
         if shared.region_depth_fn is None:
             return JSONResponse({"error": "depth not supported by this backend"},
                                 status_code=404)

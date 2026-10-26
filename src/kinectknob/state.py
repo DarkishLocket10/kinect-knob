@@ -39,7 +39,8 @@ class SharedState:
             Callable[[int, int, int, int], Optional[dict]]] = None
         self.relearn_fn: Optional[Callable[[], None]] = None
         # Camera lifecycle, published for the dashboard: "ok" | "absent" |
-        # "error" | "down". "absent" is a WAIT, not a failure — see main.
+        # "error" | "off" | "starting". "absent" is a WAIT, not a failure, and
+        # "off" is the scheduled off window — see main.
         self.camera: str = "starting"
         self.camera_detail: str = ""
         self.camera_waiting_s: float = 0.0
@@ -47,6 +48,8 @@ class SharedState:
         self.recycles: int = 0          # in-process recoveries in the last window
         self.idle: bool = False         # presence says the room is empty
         self.presence = None            # presence.DepthPresence, set by App
+        self.schedule_fn: Optional[Callable[[], dict]] = None   # OffWindow.describe
+        self.restart_fn: Optional[Callable[[], bool]] = None    # App.request_restart
 
     def update_vision(
         self,
@@ -93,6 +96,18 @@ class SharedState:
         with self._lock:
             self._fullres = bgr
             self._fullres_t = time.monotonic()
+
+    def clear_frames(self) -> None:
+        """Forget the last frames of a camera that has gone away, so nothing
+        downstream mistakes them for a current view."""
+        with self._lock:
+            self._fullres = None
+            self._fullres_t = 0.0
+            self._rgb = None
+            self._hands = []
+            self.last_frame_t = 0.0
+            self.fps = 0.0
+            self.proc_ms = 0.0
 
     def fullres(self) -> tuple[Optional[np.ndarray], float]:
         """Latest full-resolution UNMIRRORED BGR frame and its capture time."""
@@ -142,6 +157,7 @@ class SharedState:
                 "fps": round(self.fps, 1),
                 "proc_ms": round(self.proc_ms, 1),
                 "uptime_s": int(time.time() - self.started_at),
+                "schedule": self.schedule_fn() if self.schedule_fn else None,
                 "engine": {
                     "state": eng.state,
                     "hand_present": eng.hand_present,

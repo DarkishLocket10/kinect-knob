@@ -11,6 +11,18 @@ class CaptureError(RuntimeError):
     """Device missing / failed to open, with a user-actionable message."""
 
 
+class DeviceWedged(CaptureError):
+    """Opened, but left half-started: libfreenect2's start() submitted the
+    colour transfers, then every depth/IR submission failed and it returned
+    false WITHOUT cancelling them. Its API cannot reclaim them — stop() is a
+    no-op on a device it never marked streaming, and close() would free
+    transfers that are still in flight. Only process exit releases them (the
+    kernel reaps the URBs), so this is the one capture failure that must end
+    the process. Reopening in-process is what produced the 20
+    LIBUSB_ERROR_BUSY lines — one per stuck colour transfer — before every
+    failed restart through 2026-10-26."""
+
+
 class DeviceAbsent(CaptureError):
     """No camera is physically attached — distinct from one that is attached
     and misbehaving.

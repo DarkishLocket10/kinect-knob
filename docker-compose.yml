@@ -64,6 +64,13 @@ services:
       # come back, true falls back to a webcam. The fallback on a host with no
       # webcam is what made a vanished Kinect a 61s container boot loop.
       - KK_AUTO_FALLBACK=${KK_AUTO_FALLBACK:-false}
+      # Daily camera-off window (HH:MM-HH:MM, may cross midnight; empty = always
+      # on). The Kinect's USB stalls storm overnight and nobody uses the knob
+      # then, so the stream is stopped and the device closed for the window;
+      # when it ends the process exits and the container restarts it fresh.
+      # whiteboard-sync sees 503 {"camera": "off"} meanwhile.
+      - KK_OFF_WINDOW=${KK_OFF_WINDOW-20:00-06:30}
+      - KK_TZ=${KK_TZ:-America/New_York}
       # -- Presence -----------------------------------------------------------
       # Pause hand tracking while the room is empty (the camera keeps
       # streaming — whiteboard-sync photographs the boards through it exactly
