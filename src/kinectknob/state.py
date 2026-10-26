@@ -45,7 +45,7 @@ class SharedState:
         self.camera_detail: str = ""
         self.camera_waiting_s: float = 0.0
         self.generation: int = 0        # capture generations opened this process
-        self.recycles: int = 0          # in-process recoveries in the last window
+        self.recycles: int = 0          # capture-failure restarts, last 30 min
         self.idle: bool = False         # presence says the room is empty
         self.presence = None            # presence.DepthPresence, set by App
         self.schedule_fn: Optional[Callable[[], dict]] = None   # OffWindow.describe

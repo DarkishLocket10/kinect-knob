@@ -74,45 +74,32 @@ def test_an_explicit_unknown_backend_still_fails_loudly():
         create_capture(CaptureConfig(backend="potato"))
 
 
-def test_repeated_failures_eventually_hand_over_to_the_container(monkeypatch):
-    """In-process recovery is cheaper, but a device that keeps dying needs the
-    USB stack power-cycled — which only a container restart does."""
+def test_capture_failures_end_the_process(monkeypatch, tmp_path):
+    """No in-process reopen: the binding's process-wide context hands a
+    reopen the same stale device (2026-10-26), so a broken camera — as
+    opposed to an absent one — must exit for a fresh process."""
     from kinectknob import main
 
     app = object.__new__(main.App)
-    app._recycles = []
     app.exit_code = 0
+    app._exit_log = tmp_path / "exits.json"
+    app.stop_event = __import__("threading").Event()
+    app._stop_reason = None
 
     class _Shared:
-        recycles = 0
+        def set_camera(self, *a, **k):
+            pass
     app.shared = _Shared()
 
-    t = [1000.0]
-    monkeypatch.setattr(main.time, "monotonic", lambda: t[0])
+    class _Window:
+        def active(self):
+            return False
+    app.off_window = _Window()
 
-    for i in range(main._MAX_RECYCLES):
-        assert main.App._may_recycle(app) is True, f"recycle {i} should be allowed"
-        t[0] += 1.0
-    assert main.App._may_recycle(app) is False
+    def boom(cfg):
+        raise CaptureError("Kinect v2 not found")
+
+    monkeypatch.setattr(main, "create_capture", boom)
+    monkeypatch.setattr(main.App, "_request_replug", lambda self: None)
+    assert main.App._acquire_capture(app) is None
     assert app.exit_code == main.EXIT_CAPTURE_FAILURE
-
-
-def test_failures_spread_out_over_time_never_exhaust_the_budget(monkeypatch):
-    """One stall every few hours is the documented normal for this host's USB
-    controller. It must never accumulate into an exit."""
-    from kinectknob import main
-
-    app = object.__new__(main.App)
-    app._recycles = []
-    app.exit_code = 0
-
-    class _Shared:
-        recycles = 0
-    app.shared = _Shared()
-
-    t = [1000.0]
-    monkeypatch.setattr(main.time, "monotonic", lambda: t[0])
-    for _ in range(50):
-        assert main.App._may_recycle(app) is True
-        t[0] += main._RECYCLE_WINDOW_S + 1.0
-    assert app.exit_code == 0

@@ -85,25 +85,6 @@ def _fix_frame_create_leak() -> None:
     log.info("patched freenect2.Frame.create with gc-managed allocation (leak fix)")
 
 
-def _dispose_freenect2_context() -> None:
-    """Destroy the binding's process-wide ``Freenect2`` context (a module
-    global it creates once, enumerates once and never refreshes). Its
-    destructor deletes any device objects still registered — taking their
-    OpenCL pipelines with them — and calls libusb_exit; the next Device()
-    builds a fresh context and re-enumerates the bus. Only call with no live
-    Device: the binding's Device objects hold raw pointers into it."""
-    import freenect2
-
-    ctx = getattr(freenect2, "_FREENECT2_SINGLETON", None)
-    if ctx is None:
-        return
-    freenect2._FREENECT2_SINGLETON = None
-    try:
-        freenect2.ffi.release(ctx)   # run freenect2_dispose now, not at GC time
-    except Exception:  # noqa: BLE001
-        log.debug("freenect2 context release raised", exc_info=True)
-
-
 class KinectV2Capture(CaptureBase):
     name = "kinect2"
     has_depth = True
@@ -553,33 +534,23 @@ class KinectV2Capture(CaptureBase):
         return Frame(rgb=rgb, depth_mm=depth_mm, t=t, seq=self._seq, ir=True)
 
     def stop(self) -> None:
-        """Stop streaming, CLOSE the device and drop the libusb context.
+        """Stop streaming (cancel the transfers) and NOTHING else — the caller
+        exits the process next, and the kernel releases the device.
 
-        Stopping alone is not a teardown. The binding's Device has no
-        finaliser, so a device that is never close()d stays in libfreenect2's
-        open-device list with its interfaces claimed — and the next
-        Device() is handed that same stale object back ("device @4:5 is
-        already be open!"), which is why every in-process recycle before
-        2026-10-26 failed within seconds (LIBUSB_ERROR_BUSY / "all
-        submissions failed") and burned the recycle budget into a container
-        restart. Disposing the context as well makes the next open a genuine
-        fresh start: new libusb context, fresh enumeration, libfreenect2's
-        USB reset on open, and a new OpenCL pipeline instead of one leaked
-        per recycle."""
-        if self._wedged:
-            return   # unsafe to touch (see DeviceWedged); the process is exiting
-        dev, streaming = self._device, self._streaming
-        self._device = None
+        Everything beyond stop() was tried on the live sensor 2026-10-26 and
+        crashed: ``close()`` segfaults in a libfreenect2 worker thread
+        (exit 139, every time), and disposing the binding's context to get a
+        fresh one deadlocked under the GIL or segfaulted without it. Nor can
+        the process reopen without them — the binding's one process-wide
+        context hands a reopen the same stale handle ("device @4:5 is already
+        be open!"), which is why every in-process recycle before this date
+        failed within seconds. So: stop, keep the Device referenced (its
+        listeners must not be garbage-collected under native threads), exit.
+        """
+        if self._wedged or not self._streaming:
+            return   # wedged: unsafe to touch (see DeviceWedged)
         self._streaming = False
-        if dev is not None and streaming:
-            try:
-                dev.stop()
-            except Exception:  # noqa: BLE001 — stopping a dead device
-                log.debug("device stop raised", exc_info=True)
-        if dev is not None:
-            try:
-                dev.close()
-            except Exception:  # noqa: BLE001
-                log.debug("device close raised", exc_info=True)
-        self._listener = None
-        _dispose_freenect2_context()
+        try:
+            self._device.stop()
+        except Exception:  # noqa: BLE001 — stopping a dead device
+            log.debug("device stop raised", exc_info=True)

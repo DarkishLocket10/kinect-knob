@@ -101,9 +101,10 @@ over the README where they differ.
   thread (web server, HA client, controller) outlives it. Three cases:
   **absent** (nothing on the bus — `DeviceAbsent`) waits in-process forever,
   polling every 5 s, because no restart can summon a USB device; **failed /
-  stalled** re-opens in-process; **failing repeatedly** (> `_MAX_RECYCLES`=4
-  inside `_RECYCLE_WINDOW_S`=10 min) still exits 3 so the restart policy
-  power-cycles the USB stack. Keep that last escape hatch.
+  stalled / wedged** exits 3 for a fresh process (superseded 2026-10-26: the
+  in-process reopen this section originally described never worked — see
+  the next section), with a remembered back-off and a replug when failures
+  pile up.
 - `KK_AUTO_FALLBACK=true` restores the old webcam fallback. Leave it off here.
 - `/healthz` returns 200 with `status: "waiting for camera"` while deliberately
   waiting — the process is fine and restarting it changes nothing. It still
@@ -111,46 +112,63 @@ over the README where they differ.
 - The dashboard chip row shows camera state, presence and recycle count, so
   "idling on purpose" is never mistaken for "dead".
 
-## Recycles that actually recycle, and the night off window (2026-10-26)
+## Every capture failure restarts the process; the sensor sleeps at night (2026-10-26)
 
-- **The in-process recycle never worked until this date.** `stop()` only
-  stopped the stream: the binding's `Device` has no finaliser and nothing
-  called `close()`, so libfreenect2 kept the device in its open list and the
-  "reopen" was handed the same half-dead handle (`device @4:5 is already be
-  open!` — no USB reset, no re-enumeration, a new OpenCL pipeline leaked per
-  attempt). Recycles failed within seconds, burned the 4/10 min budget and
-  exited 3: 227 container restarts, each one flashing the sensor.
-  `KinectV2Capture.stop()` now stops, CLOSES, and disposes the binding's
-  process-wide `Freenect2` context (`_dispose_freenect2_context`), so the next
-  open is a genuinely fresh start. Teardown joins the capture thread FIRST.
-- **Half-started devices (`DeviceWedged`).** libfreenect2's `start()` returns
-  false when every depth/IR submission fails, but leaves its 20 colour
-  transfers in flight (the binding discarded the return value; we call
-  `lib.freenect2_device_start` directly now). Such a device can be neither
-  stopped (no-op) nor closed (frees in-flight transfers) — the process exits
-  3 and the kernel reaps the URBs. Those stuck transfers were the 20
-  `LIBUSB_ERROR_BUSY` lines on every failed reopen.
-- Failure exits are remembered in `data/capture_exits.json` (30 min): a
-  restart after recent failure exits rests 30 s, doubling to 10 min, before
-  opening the sensor. In-process reopens back off 3/10/30/60 s.
-- Presence models (scene + whiteboard region planes) now SURVIVE recycles —
-  relearning re-seeded the "empty board" from whoever sat in front of it.
-  `POST /api/presence/relearn` is the explicit reset.
+- **In-process recycling is gone, on purpose.** It never worked: `stop()`
+  only stopped the stream, nothing called `close()`, and the pinned binding's
+  single process-wide `Freenect2` context (enumerated once, never forgets a
+  device) handed every "reopen" the same half-dead handle (`device @4:5 is
+  already be open!`). Recycles failed within seconds and cascaded into 227
+  container restarts — each one flashing the sensor. Disposing the context
+  to force a fresh one was tried on the live sensor: run as a cffi gc
+  destructor it DEADLOCKS (GIL held while libfreenect2 joins a
+  packet-processor thread that is waiting for the GIL); as a plain lib call
+  it SEGFAULTS. And `Device.close()` itself segfaults in a libfreenect2
+  worker thread (exit 139, 3/3 tries). Don't try again. Now: `stop()` only
+  cancels the stream (stable for months) and keeps the Device referenced;
+  the process then exits through `os._exit` (interpreter teardown would GC
+  the frame listeners under native threads) and the container starts a
+  fresh one (~5 s). `PYTHONFAULTHANDLER=1` in compose turns any native
+  crash into per-thread stacks in the log instead of a bare exit 139.
+- **Half-started devices (`DeviceWedged`).** libfreenect2's `start()`
+  returns false when every depth/IR submission fails but leaves 20 colour
+  transfers in flight (the binding discarded that return value; we call
+  `lib.freenect2_device_start` directly). Such a device can be neither
+  stopped (no-op) nor closed (frees in-flight transfers): never touch it, exit.
+- **The reset that works is a logical replug** (`capture/usb_power.py`):
+  sysfs `authorized` 0 -> 1 on the Kinect's hub (045e:02d9). On 2026-10-26
+  the sensor reached a state where every fresh process failed with "all
+  submissions failed" — libfreenect2's own reset-on-open did nothing; the
+  replug fixed it each time. Replugs run at the START of the next process
+  (marker `data/replug_on_start`), never under a live libusb handle. Compose bind-mounts `/sys/bus/usb/devices/usb4`
+  (the Matisse xHCI, 09:00.3) at `/host-usb`; no privileges needed. Use the
+  symlink form — compose re-serialises binds as `src:dst` and the real PCI
+  path's colons break it. `KK_USB_SYSFS` if the Kinect changes controller.
+- Failure exits are remembered in `data/capture_exits.json` (30 min). 1st:
+  restart at once (daytime stalls are ~1-4/h). 2nd+: rest 30 s doubling to
+  10 min before opening. 3rd+ and every wedge: replug on the next start. A
+  teardown that hangs > 20 s hard-exits.
 - **Off window** `KK_OFF_WINDOW=20:00-06:30`, `KK_TZ=America/New_York`
-  (compose default; set `KK_OFF_WINDOW=` empty in .env to disable). Every
-  stall storm in the 2026-10-14..26 logs fell 21:00-07:00 Eastern. During the
-  window the device is closed (`camera: "off"`), `/healthz` is 200 `scheduled
-  off`, and `/api/snapshot`, `/api/region_depth`, region `/api/presence`
-  return **503 `{"camera": "off"}`** — whiteboard-sync skips on that. At the
-  window end the process exits 0 and the container restarts fresh: a clean
-  daily restart, so nothing compounds across days.
-- `POST /api/camera/restart` (dashboard "Restart camera") closes and reopens
-  the sensor properly without counting against the failure budget.
+  (compose default; `KK_OFF_WINDOW=` empty in .env disables). Every stall
+  storm in the Oct 14-26 logs fell 21:00-07:00 Eastern. When the window
+  opens the stream is stopped and the process restarts; the new process sees
+  the window, never opens the device, and DE-AUTHORIZES the hub (sensor
+  unconfigured, emitters dark); `/healthz` is 200 `scheduled off`; `/api/snapshot`,
+  `/api/region_depth` and region `/api/presence` return **503
+  `{"camera": "off"}`** (whiteboard-sync skips on that). At the end the hub
+  is re-authorized and the process exits 0 — a clean daily restart. Every
+  startup outside the window re-authorizes, so a container stopped at night
+  can't leave the Kinect unplugged.
+- `POST /api/camera/restart` (dashboard "Restart camera"): stop, exit 0,
+  replug on start — the same clean restart, on demand, not a failure.
 - Snapshots never serve a frame older than 5 s; any non-`ok` camera is 503.
-- The underlying USB stall (depth/IR iso transfers retiring one
+- Known follow-up: whiteboard region presence is re-learned by every new
+  process (it is in-memory), so a restart while someone sits at a board seeds
+  them into the "empty" plane until the motionless-absorb window passes.
+  Persisting `RegionPresence` to `data/` would fix it.
+- The underlying stall (depth/IR iso transfers retiring one
   `LIBUSB_ERROR_IO` at a time until the pool of 60 runs dry) is unchanged —
-  that is the Matisse CPU xHCI (09:00.3); a Renesas/Intel PCIe USB3 card
-  remains the hardware fix.
+  it is the Matisse CPU xHCI; a Renesas/Intel PCIe USB3 card remains the fix.
 
 ## Sharp edges
 
@@ -164,7 +182,7 @@ over the README where they differ.
   policy — see runbook §3.3/§9 (Kinect re-enumerates; restart is the designed
   USB-stall recovery).
 - The Kinect stalls (`LIBUSB_ERROR_IO`) on this host's AMD USB controller
-  (daytime ~1-4/h, overnight storms) — the in-process recycle recovers it
-  (properly since 2026-10-26, see above). If gesture
+  (daytime ~1-4/h, overnight storms) — a process restart recovers it
+  (see above). If gesture
   sessions feel choppy, that's why; hardware fix is an Intel/Renesas PCIe USB3
   card (runbook §2/§6).

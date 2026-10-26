@@ -179,7 +179,7 @@ async function tick() {
       chip(s.proc_ms + ' ms/frame'),
       chip(s.has_depth ? 'depth: on' : 'depth: none', s.has_depth ? 'on' : 'warn'),
       ...(s.ir_active ? [chip('IR night mode', 'on')] : []),
-      ...(s.recycles ? [chip('camera recycled ' + s.recycles + 'x', 'warn')] : []),
+      ...(s.recycles ? [chip(s.recycles + ' camera failure restart(s) in 30 min', 'warn')] : []),
       ...(s.schedule && s.schedule.off_window && s.camera !== 'off'
           ? [chip('off ' + s.schedule.off_window)] : []),
       c.mode === 'dry-run'

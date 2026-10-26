@@ -29,6 +29,16 @@ services:
       - /dev/bus/usb:/dev/bus/usb
       # Dashboard tuning overrides persist here (tuning.json) across restarts.
       - ./data:/app/data
+      # The Kinect's USB controller in sysfs, so the app can logically unplug
+      # and replug the sensor (authorized 0/1): the only reset that recovers a
+      # wedged sensor, and how it is switched off for the night window. usb4 is
+      # the AMD Matisse xHCI (09:00.3); if the Kinect moves to another
+      # controller, set KK_USB_SYSFS to its /sys/bus/usb/devices/usbN (`lsusb -t`).
+      # The symlink form matters: compose turns binds back into "src:dst"
+      # strings, and the real PCI path's colons break that.
+      - type: bind
+        source: ${KK_USB_SYSFS:-/sys/bus/usb/devices/usb4}
+        target: /host-usb
       # Optional deep tuning: copy config.example.yaml to config.yaml, edit,
       # then uncomment this line AND set KK_CONFIG=/app/config.yaml in .env.
       # - ./config.yaml:/app/config.yaml:ro
@@ -39,6 +49,9 @@ services:
       # `docker logs` lagged minutes behind reality — and the camera-recovery
       # story is told entirely through those lines.
       - PYTHONUNBUFFERED=1
+      # A native crash (libfreenect2/libusb/OpenCL) dumps every thread's
+      # Python stack to the log instead of vanishing as a bare exit 139.
+      - PYTHONFAULTHANDLER=1
       # -- Home Assistant ---------------------------------------------------
       - KK_HA_URL=${KK_HA_URL}
       - KK_HA_TOKEN=${KK_HA_TOKEN}

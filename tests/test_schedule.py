@@ -83,8 +83,8 @@ def test_env_wires_schedule(monkeypatch):
 
 
 # -- teardown really closes the device ----------------------------------------
-def test_stop_closes_device_and_disposes_context(monkeypatch):
-    freenect2 = pytest.importorskip("freenect2")
+def test_stop_only_stops_the_stream():
+    pytest.importorskip("freenect2")
     from kinectknob.capture.kinect_v2 import KinectV2Capture
 
     calls = []
@@ -96,23 +96,14 @@ def test_stop_closes_device_and_disposes_context(monkeypatch):
         def close(self):
             calls.append("close")
 
-    sentinel = object()
-    monkeypatch.setattr(freenect2, "_FREENECT2_SINGLETON", sentinel)
-    class FakeFFI:
-        @staticmethod
-        def release(obj):
-            calls.append(("release", obj is sentinel))
-
-    monkeypatch.setattr(freenect2, "ffi", FakeFFI)
     cap = KinectV2Capture.__new__(KinectV2Capture)
     cap._device, cap._listener = Dev(), object()
     cap._streaming, cap._wedged = True, False
     cap.stop()
-    assert calls == ["stop", "close", ("release", True)]
-    assert freenect2._FREENECT2_SINGLETON is None
-    assert cap._device is None and not cap._streaming
-    cap.stop()  # idempotent: nothing left to close
-    assert len(calls) == 3
+    assert calls == ["stop"]            # never close(): it segfaults (exit 139)
+    assert cap._device is not None      # listeners must outlive native threads
+    cap.stop()                          # idempotent
+    assert calls == ["stop"]
 
 
 def test_half_started_device_is_wedged_and_never_closed(monkeypatch):
@@ -225,3 +216,60 @@ def test_restart_endpoint(web):
     assert _body(asyncio.run(_route(app, "/api/camera/restart", "POST")()))["ok"]
     shared.restart_fn = lambda: False
     assert asyncio.run(_route(app, "/api/camera/restart", "POST")()).status_code == 409
+
+
+# -- logical unplug / replug ----------------------------------------------------
+def _fake_sysfs(tmp_path):
+    for name, pid in (("4-1", "02d9"), ("4-1.1", "02c4"), ("3-2", "0002")):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "idVendor").write_text("045e\n" if pid != "0002" else "051d\n")
+        (d / "idProduct").write_text(pid + "\n")
+        (d / "authorized").write_text("1\n")
+    (tmp_path / "4-1:1.0").mkdir()   # interface dirs have no authorized file
+    return tmp_path
+
+
+def test_replug_targets_only_the_kinect_hub(tmp_path):
+    from kinectknob.capture import usb_power
+
+    root = _fake_sysfs(tmp_path)
+    assert [p.name for p in usb_power.kinect_nodes(root)] == ["4-1"]
+    assert usb_power.set_authorized(False, root)
+    assert (root / "4-1" / "authorized").read_text() == "0"
+    assert (root / "3-2" / "authorized").read_text() == "1\n"   # UPS untouched
+    assert usb_power.replug(off_s=0, root=root)
+    assert (root / "4-1" / "authorized").read_text() == "1"
+
+
+def test_replug_is_a_noop_without_the_mount(tmp_path):
+    from kinectknob.capture import usb_power
+
+    assert usb_power.kinect_nodes(tmp_path / "missing") == []
+    assert usb_power.replug(off_s=0, root=tmp_path / "missing") is False
+
+
+def test_rest_before_open_backs_off_only_on_repeats():
+    from kinectknob.main import _rest_before_open_s
+
+    assert _rest_before_open_s(0) == 0 and _rest_before_open_s(1) == 0
+    assert [_rest_before_open_s(n) for n in (2, 3, 4)] == [30, 60, 120]
+    assert _rest_before_open_s(20) == 600
+
+
+def test_failures_replug_once_they_pile_up(tmp_path, monkeypatch):
+    from kinectknob import main
+
+    replugs = []
+    monkeypatch.setattr(main.App, "_request_replug", lambda self: replugs.append(1))
+    app = main.App.__new__(main.App)
+    app._exit_log = tmp_path / "capture_exits.json"
+    app.exit_code = 0
+    app._fail_exit("stall")
+    app._fail_exit("stall")
+    assert replugs == [] and app.exit_code == main.EXIT_CAPTURE_FAILURE
+    app._fail_exit("stall")                      # third in 30 min
+    assert replugs == [1]
+    app._exit_log.unlink()
+    app._fail_exit("wedged", force_replug=True)  # wedged always replugs
+    assert replugs == [1, 1]
