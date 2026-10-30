@@ -186,3 +186,37 @@ over the README where they differ.
   (see above). If gesture
   sessions feel choppy, that's why; hardware fix is an Intel/Renesas PCIe USB3
   card (runbook §2/§6).
+
+## Settings safety, USB 2.0 twin, play/pause, dashboard (2026-10-30, branch `review-and-dashboard`)
+
+- **The user hand-tuned `data/tuning.json`; never lose or move those values.**
+  `Tuning` now pins every key the user set (saved even when equal to today's
+  baseline, so a default or `.env` change can't move it), carries unknown keys
+  and out-of-range saved values through saves untouched, fsyncs before the
+  rename, and on a damaged file moves it aside (`tuning.corrupt-*.json`) and
+  loads `tuning.lastgood.json` (refreshed on every clean boot). "Reset all"
+  writes `tuning.backup-<ts>-reset.json` first; `POST /api/tuning/restore`
+  re-applies the newest non-restore backup. Also `POST /api/tuning/reset
+  {"key"}`, `GET /api/tuning/export`, `POST /api/tuning/import {"values"}`.
+  Don't change a tunable's default or narrow its range without checking the
+  live file: values outside a range are applied clamped (the file keeps the
+  original).
+- **The Kinect hub is two USB devices**: 4-1 (SuperSpeed, usb4) and its USB 2.0
+  twin 3-1 (usb3), both 045e:02d9. On 10-27 a replug of 4-1 alone brought the
+  sensor back under 3-1 at 480 Mb/s ("unable to get BOS descriptor", then
+  `LIBUSB_ERROR_PIPE` on every open, mislabelled "not found") for 5.4 h until a
+  physical reseat. usb3 is now bind-mounted at /host-usb2 (`KK_USB_SYSFS2`),
+  both halves are (de)authorized, SuperSpeed first, and `usb_power.on_usb2()`
+  turns that state into an immediate replug. Bus 3 also carries the UPS (3-2,
+  051d); only 045e devices are ever touched.
+- Play/pause sends `media_pause`/`media_play` by player state; an idle Spotify
+  (supported_features 2048) can't resume, so the gesture logs "nothing to
+  resume" instead of the error it hit on all 75 tries 10-26..30.
+- Exposure: `KK_EXPOSURE=semi:8` did not hold before the 10-27 physical reseat
+  (exposure crept to ~33 ms) and has held since, gain stays 1.0 — that is why
+  whiteboard photos got ~2.5x darker. It is the user's setting; options are
+  `auto`, or a longer cap.
+- Dashboard rebuilt: full width, volume | live tracking | events in one row,
+  icon media buttons, debug stream only while its section is open, tuning in
+  columns with search, "only changed", defaults under each slider, undo on
+  every reset, export/import/restore.

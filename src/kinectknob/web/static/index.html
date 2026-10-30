@@ -56,7 +56,9 @@
   .card { background: var(--card); border: 1px solid var(--edge); border-radius: var(--r); padding: 16px 18px; min-width: 0; }
   .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 1.1px; color: var(--dim); margin-bottom: 12px;
              display: flex; align-items: center; gap: 10px; }
-  .card h2 .right { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; display: flex; gap: 8px; align-items: center; }
+  .card h2 { flex-wrap: wrap; }
+  .card h2 .right { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; display: flex; gap: 8px;
+                    align-items: center; flex-wrap: wrap; }
 
   /* volume */
   .dial-box { display: flex; flex-direction: column; align-items: center; gap: 8px; }
