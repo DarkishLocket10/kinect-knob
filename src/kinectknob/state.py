@@ -25,6 +25,12 @@ class SharedState:
         self.last_frame_t: float = 0.0                  # monotonic
         self._fullres: Optional[np.ndarray] = None      # unmirrored BGR 1080p
         self._fullres_t: float = 0.0
+        # Scheduled off window: "" while the camera runs, else a description
+        # ("scheduled off until ..."). Off by schedule is healthy - the
+        # wall-pad watchdog restarts the node whenever /healthz is not ok.
+        self.camera_off: str = ""
+        self.vision_idle: bool = False                  # idle-throttled (no hand seen)
+        self.schedule_fn: Optional[Callable[[], dict]] = None
         # Backend hooks, set once by main before the threads start and called
         # from the web executor: stacked "proper photos" (capture_photo),
         # stacked active-IR photos (capture_ir_photo), and aligned-depth
@@ -68,6 +74,8 @@ class SharedState:
 
     def healthy(self, max_age_s: float = 5.0) -> bool:
         with self._lock:
+            if self.camera_off:
+                return True
             return self.last_frame_t > 0 and (time.monotonic() - self.last_frame_t) < max_age_s
 
     def state_dict(self) -> dict:
@@ -80,6 +88,9 @@ class SharedState:
                 "fps": round(self.fps, 1),
                 "proc_ms": round(self.proc_ms, 1),
                 "uptime_s": int(time.time() - self.started_at),
+                "camera_off": self.camera_off,
+                "vision_idle": self.vision_idle,
+                "schedule": self.schedule_fn() if self.schedule_fn else None,
                 "engine": {
                     "state": eng.state,
                     "hand_present": eng.hand_present,

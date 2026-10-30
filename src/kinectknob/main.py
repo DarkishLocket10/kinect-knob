@@ -9,6 +9,11 @@ data and never queues stale frames):
 
 If the capture device stalls (a known libfreenect2 long-run failure mode) the
 process exits non-zero so the container restart policy power-cycles the stack.
+
+Two CPU savers for hosts that track on the CPU (the Surface wall pad):
+``schedule.off_window`` (``KK_OFF_WINDOW``) releases the camera for a daily
+window, and ``capture.idle_fps`` (``KK_IDLE_FPS``) throttles the tracker once
+no hand has been seen for ``capture.idle_after_s``.
 """
 from __future__ import annotations
 
@@ -29,6 +34,7 @@ from .config import AppConfig
 from .controller import Controller
 from .gestures.engine import GestureEngine
 from .ha.client import HAClient
+from .schedule import OffWindow
 from .state import SharedState
 from .tuning import Tuning
 from .types import Frame
@@ -82,6 +88,9 @@ class App:
         # Applies any saved dashboard-tuning overrides onto cfg immediately.
         self.tuning = Tuning(cfg)
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self.off_window = OffWindow(cfg.schedule.off_window, cfg.schedule.tz)
+        self.shared.schedule_fn = self.off_window.describe
+        self.camera_off = threading.Event()   # set while the window holds the camera closed
 
     # ------------------------------------------------------------------
     def run(self) -> int:
@@ -92,7 +101,9 @@ class App:
 
         try:
             capture = create_capture(self.cfg.capture)
-            capture.start()
+            # Inside the off window the capture thread opens it at the edge.
+            if not self.off_window.active():
+                capture.start()
         except CaptureError as exc:
             log.critical("capture failed to start: %s", exc)
             return EXIT_CAPTURE_FAILURE
@@ -155,7 +166,14 @@ class App:
             270: cv2.ROTATE_90_COUNTERCLOCKWISE,
         }.get(self.cfg.capture.rotate)
         try:
+            if self.off_window.enabled:
+                log.info("camera off window %s (%s); next change %s",
+                         self.off_window.spec, self.off_window.tz_name,
+                         self.off_window.describe()["next_change"])
             while not self.stop_event.is_set():
+                if self.off_window.active():
+                    self._sleep_through_off_window(capture)
+                    continue
                 frame = capture.read()
                 if frame is None:
                     continue
@@ -185,6 +203,23 @@ class App:
             self.exit_code = EXIT_CAPTURE_FAILURE
             self.stop_event.set()
 
+    def _sleep_through_off_window(self, capture) -> None:
+        """Release the camera for the scheduled window, then reopen it. A
+        reopen failure raises CaptureError into the capture loop's handler."""
+        until = self.off_window.describe()["next_change"]
+        self.camera_off.set()
+        self.shared.camera_off = f"scheduled off until {until}"
+        capture.stop()   # safe on a never-started capture
+        log.info("camera is OFF until %s (%s)", until, self.off_window.tz_name)
+        while self.off_window.active() and not self.stop_event.wait(30.0):
+            pass
+        if self.stop_event.is_set():
+            return
+        capture.start()
+        log.info("off window over - camera back on")
+        self.shared.camera_off = ""
+        self.camera_off.clear()
+
     # ------------------------------------------------------------------
     def _vision_loop(self, tracker, engine: GestureEngine) -> None:
         import cv2
@@ -197,10 +232,14 @@ class App:
         proc_ema = 0.0  # high when frame intervals alternate (Jensen bias)
         last_t = time.monotonic()
         no_frame_since = time.monotonic()
+        last_hand_t = time.monotonic()
 
         while not self.stop_event.is_set():
             frame = self.slot.get(timeout=0.5)
             if frame is None:
+                if self.camera_off.is_set():
+                    no_frame_since = time.monotonic()   # off by schedule, not stalled
+                    continue
                 if time.monotonic() - no_frame_since > 15.0:
                     log.critical("no frames for 15s — giving up")
                     self.exit_code = EXIT_CAPTURE_FAILURE
@@ -258,6 +297,18 @@ class App:
             proc_ema = 0.9 * proc_ema + 0.1 * proc_ms if proc_ema else proc_ms
 
             self.shared.update_vision(rgb, hands, engine.snapshot(), fps_ema, proc_ema, ir=frame.ir)
+
+            # Idle throttle: with nobody's hand in view, rest between frames.
+            # The first frame that finds a hand drops straight back to full rate.
+            if hands:
+                last_hand_t = now
+            idle_fps = self.cfg.capture.idle_fps
+            idle = idle_fps > 0 and now - last_hand_t > self.cfg.capture.idle_after_s
+            self.shared.vision_idle = idle
+            if idle:
+                rest = 1.0 / idle_fps - (time.monotonic() - t0)
+                if rest > 0:
+                    self.stop_event.wait(rest)
 
             if self.preview:
                 from . import debugdraw

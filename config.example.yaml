@@ -24,6 +24,9 @@ capture:
   pan_x: 0.0             # where the crop window sits, as a fraction of the slack:
   pan_y: 0.0             # 0 centred, -1 flush left/top, +1 flush right/bottom.
                          # No effect at crop 1.0 (nothing to slide within).
+  idle_fps: 0            # tracker rate once no hand is in view (0 = always full rate);
+                         # 6 on a CPU-only host saves most of the tracking cost
+  idle_after_s: 3.0      # how long without a hand before the idle rate applies
 
 gate:                    # who is allowed to control the knob
   use_depth: true        # needs a Kinect (depth camera)
@@ -74,6 +77,10 @@ web:
   host: 0.0.0.0
   port: 8420
   debug_stream: true     # live MJPEG overlay at /debug/stream (on-demand only)
+
+schedule:
+  off_window: ""         # daily camera-off window, e.g. "01:00-06:00" (may cross midnight)
+  tz: ""                 # IANA zone for the window; "" = host local time
 
 model_path: models/hand_landmarker.task
 num_hands: 2

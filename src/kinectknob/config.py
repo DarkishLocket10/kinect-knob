@@ -57,6 +57,12 @@ class CaptureConfig:
     # 0 = centred, -1 = flush left/top, +1 = flush right/bottom. Inert at crop 1.0.
     pan_x: float = 0.0
     pan_y: float = 0.0
+    # Idle throttle: once no hand has been seen for idle_after_s, run the
+    # tracker at most idle_fps times a second (0 = always full rate). Palm
+    # detection on an empty frame is the expensive path, and on a CPU-only
+    # host it ran ~30x a second at an empty room.
+    idle_fps: float = 0.0
+    idle_after_s: float = 3.0
 
 
 @dataclass
@@ -117,6 +123,13 @@ class PlayPauseConfig:
 
 
 @dataclass
+class ScheduleConfig:
+    # Daily camera-off window, "HH:MM-HH:MM" (may cross midnight); "" = never.
+    off_window: str = ""
+    tz: str = ""                        # IANA zone; "" = host local time
+
+
+@dataclass
 class WebConfig:
     host: str = "0.0.0.0"
     port: int = 8420
@@ -132,6 +145,7 @@ class AppConfig:
     swipe: SwipeConfig = field(default_factory=SwipeConfig)
     playpause: PlayPauseConfig = field(default_factory=PlayPauseConfig)
     web: WebConfig = field(default_factory=WebConfig)
+    schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     model_path: str = "models/hand_landmarker.task"
     num_hands: int = 2
     mp_delegate: str = "cpu"            # hand landmarker inference: cpu | gpu
@@ -161,6 +175,10 @@ _ENV_MAP: dict[str, tuple[str, str, str]] = {
     "KK_CROP": ("capture", "crop", "float"),
     "KK_PAN_X": ("capture", "pan_x", "float"),
     "KK_PAN_Y": ("capture", "pan_y", "float"),
+    "KK_IDLE_FPS": ("capture", "idle_fps", "float"),
+    "KK_IDLE_AFTER_S": ("capture", "idle_after_s", "float"),
+    "KK_OFF_WINDOW": ("schedule", "off_window", "str"),
+    "KK_TZ": ("schedule", "tz", "str"),
     "KK_USE_DEPTH": ("gate", "use_depth", "bool"),
     "KK_DEPTH_MIN_M": ("gate", "depth_min_m", "float"),
     "KK_DEPTH_MAX_M": ("gate", "depth_max_m", "float"),
@@ -283,6 +301,10 @@ def load_config(path: Optional[str] = None) -> AppConfig:
     cfg.mp_delegate = cfg.mp_delegate.strip().lower()
     if cfg.mp_delegate not in ("cpu", "gpu"):
         raise ValueError(f"mp_delegate must be cpu|gpu, got {cfg.mp_delegate!r}")
+    cfg.capture.idle_fps = max(cfg.capture.idle_fps, 0.0)
+    cfg.capture.idle_after_s = max(cfg.capture.idle_after_s, 0.0)
+    from .schedule import OffWindow
+    OffWindow(cfg.schedule.off_window, cfg.schedule.tz)  # fail fast on a bad spec / zone
     cfg.capture.rotate %= 360
     if cfg.capture.rotate not in (0, 90, 180, 270):
         raise ValueError(
