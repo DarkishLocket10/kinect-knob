@@ -149,11 +149,23 @@ class App:
         import cv2
 
         mirror = self.cfg.capture.mirror
+        rotate = {
+            90: cv2.ROTATE_90_CLOCKWISE,
+            180: cv2.ROTATE_180,
+            270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+        }.get(self.cfg.capture.rotate)
         try:
             while not self.stop_event.is_set():
                 frame = capture.read()
                 if frame is None:
                     continue
+                if rotate is not None:
+                    # Physical orientation first: the mirror below — and the
+                    # gesture engine's view-sign that keys off it — both assume
+                    # an upright frame.
+                    frame.rgb = cv2.rotate(frame.rgb, rotate)
+                    if frame.depth_mm is not None:
+                        frame.depth_mm = cv2.rotate(frame.depth_mm, rotate)
                 if mirror:
                     # cv2.flip is a plain SIMD copy — ~3x faster than
                     # materialising a negative-stride numpy view.
@@ -177,7 +189,7 @@ class App:
     def _vision_loop(self, tracker, engine: GestureEngine) -> None:
         import cv2
 
-        from .capture.crop import center_crop
+        from .capture.crop import crop_view
         from .capture.lowlight import LowLightBoost
 
         booster = LowLightBoost()
@@ -199,16 +211,20 @@ class App:
             t0 = time.monotonic()
             rgb = frame.rgb
             depth_mm = frame.depth_mm
-            # Crop-in (live-tunable): zoom onto the centre so the user fills
-            # the frame and motion at the edges (doorways, TV, passers-by)
-            # never becomes a candidate hand. Depth MUST get the same crop —
-            # the depth sampler maps tracked pixels by relative scale, which
-            # only survives an equal-fraction crop of both arrays.
+            # Crop-in and pan (both live-tunable): zoom onto the part of the
+            # frame the user actually occupies, so they fill it and motion at
+            # the edges (doorways, TV, passers-by) never becomes a candidate
+            # hand. Depth MUST get the same window — the depth sampler maps
+            # tracked pixels by relative scale, which survives an
+            # equal-fraction crop of both arrays only while both also sit at
+            # the same relative offset.
             zoom = self.cfg.capture.crop
             if zoom > 1.001:
-                rgb = center_crop(rgb, zoom)
+                pan_x = self.cfg.capture.pan_x
+                pan_y = self.cfg.capture.pan_y
+                rgb = crop_view(rgb, zoom, pan_x, pan_y)
                 if depth_mm is not None:
-                    depth_mm = center_crop(depth_mm, zoom)
+                    depth_mm = crop_view(depth_mm, zoom, pan_x, pan_y)
             fh, fw = rgb.shape[:2]
             proc_w = self.cfg.capture.proc_width  # live-tunable from the dashboard
             if fw > proc_w:

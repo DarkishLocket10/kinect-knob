@@ -183,9 +183,14 @@ override). The ones that matter:
 - `knob.filter_min_cutoff` / `filter_beta` — One Euro filter; lower cutoff =
   smoother at rest, higher beta = snappier fast twists.
 - `gate.depth_min_m` / `depth_max_m` — the "only me, from the couch" zone.
-- `capture.crop` — crop-in zoom onto the frame centre (dashboard slider):
-  everything outside the crop is invisible to tracking, and your hand fills
-  more of the model's view. Drag it while watching Live tracking.
+- `capture.crop` — crop-in zoom (dashboard slider): everything outside the
+  crop is invisible to tracking, and your hand fills more of the model's view.
+  Drag it while watching Live tracking.
+- `capture.pan_x` / `pan_y` — slide that crop window when you don't sit in the
+  middle of what the camera sees, or it's mounted high or low. 0 is centred,
+  ±1 is flush against an edge. The value is a fraction of the slack the crop
+  leaves over, so it can't push the window out of frame, it survives a change
+  of `capture.crop` without losing your framing, and at crop 1.0 it's inert.
 - `swipe.min_speed_frac` — raise it if skips feel too eager.
 - `capture.mirror` — keep `true`; it makes clockwise-from-your-view = louder.
   If direction feels backwards, flip `knob.invert` instead.
@@ -222,7 +227,7 @@ src/kinectknob/
   controller.py   gesture events → coalesced volume_set / track skip
   web/            FastAPI status UI + MJPEG debug stream
   main.py         thread wiring, watchdog, model download
-tests/            141 tests: engine geometry, swipe gates, busy-hand, low-light, crop, config, volume math
+tests/            143 tests: engine geometry, swipe gates, busy-hand, low-light, crop + pan, config, volume math
 deploy/           Unraid template + host udev rules
 docs/DESIGN.md    algorithm details & design rationale
 ```

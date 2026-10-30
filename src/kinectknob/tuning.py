@@ -192,7 +192,26 @@ TUNABLES: tuple[Tunable, ...] = (
         "view shows exactly what the cropped tracker sees, so drag this "
         "while watching it. Applies to the depth gate too (rgb and depth "
         "are cropped together).",
-        "float", "Who counts as a hand", 1.0, 2.5, 0.05, "x",
+        "float", "Who counts as a hand", 1.0, 4.0, 0.05, "x",
+    ),
+    Tunable(
+        "capture.pan_x", "Pan left / right",
+        "Slide the cropped view sideways when you don't sit in the middle of "
+        "what the camera can see. 0 is centred, -1 puts the view hard against "
+        "the left edge of the picture, +1 hard against the right. It moves the "
+        "same way the Live tracking view does, so drag it while watching that. "
+        "Only does something while Crop-in is above 1.0 — a full-frame view has "
+        "nowhere to slide. The number is a fraction of whatever the crop leaves "
+        "over, not a pixel count, so changing Crop-in keeps your framing instead "
+        "of throwing it across the room.",
+        "float", "Who counts as a hand", -1.0, 1.0, 0.05, "",
+    ),
+    Tunable(
+        "capture.pan_y", "Pan up / down",
+        "The same, vertically: 0 centred, -1 hard against the top of the "
+        "picture, +1 hard against the bottom. This is the one to reach for when "
+        "the camera is mounted higher or lower than where you actually sit.",
+        "float", "Who counts as a hand", -1.0, 1.0, 0.05, "",
     ),
     Tunable(
         "gate.min_score", "Detection confidence",

@@ -216,6 +216,27 @@ class Controller:
         }
         if action not in table:
             return False
+        # volume_up is uncapped on the HA side and the device chooses its own
+        # step size, so a bare call can vault straight over max_volume. Send an
+        # absolute target instead — the same mechanism the knob uses, and the
+        # only one the ceiling actually binds.
+        if action == "volume_up":
+            vol = self._current_volume()
+            if vol is None:
+                log.info("volume unknown — refusing manual volume_up (safety)")
+                self._log_event("manual: volume_up blocked (volume unknown)")
+                return False
+            target = min(vol + self.cfg.ha.volume_step, self.cfg.ha.max_volume)
+            if target <= vol:
+                log.info("at max_volume — refusing manual volume_up")
+                self._log_event("manual: volume_up blocked (at ceiling)")
+                return False
+            self._log_event(f"manual: volume_up -> {target:.0%}")
+            await self._call(
+                "media_player", "volume_set", self.cfg.ha.volume_entity,
+                {"volume_level": target},
+            )
+            return True
         service, entity, data = table[action]
         self._log_event(f"manual: {action}")
         await self._call("media_player", service, entity, data)

@@ -28,6 +28,15 @@ class HAConfig:
 class CaptureConfig:
     backend: str = "auto"               # auto | kinect1 | kinect2 | webcam
     webcam_index: int = 0
+    # Windows capture API for the webcam backend: auto | dshow | msmf | any.
+    # "auto" keeps the historical DSHOW preference; Surface/Intel-ISP cameras
+    # only reach full frame rate through MSMF (DSHOW halves it there).
+    webcam_api: str = "auto"
+    # Physical camera orientation, applied to the raw frame BEFORE the selfie
+    # mirror: 0 | 90 | 180 | 270 (clockwise). 180 is an upside-down tablet.
+    # Rotating pre-mirror keeps `mirror` meaning what the gesture engine's
+    # view-sign convention assumes it means.
+    rotate: int = 0
     width: int = 640                    # webcam request; kinect backends fix their own
     height: int = 480
     fps: int = 30
@@ -43,7 +52,11 @@ class CaptureConfig:
     # leaves the firmware default (full brightness while streaming).
     logo_led: int = 0
     low_light_boost: bool = True        # auto-gamma brighten dim frames before tracking
-    crop: float = 1.0                   # crop-in zoom onto the frame centre (1.0 = full view, 2.0 = middle half)
+    crop: float = 1.0                   # crop-in zoom (1.0 = full view, 2.0 = middle half)
+    # Where that crop window sits, as a fraction of the slack it leaves:
+    # 0 = centred, -1 = flush left/top, +1 = flush right/bottom. Inert at crop 1.0.
+    pan_x: float = 0.0
+    pan_y: float = 0.0
 
 
 @dataclass
@@ -135,6 +148,10 @@ _ENV_MAP: dict[str, tuple[str, str, str]] = {
     "KK_VOLUME_STEP": ("ha", "volume_step", "float"),
     "KK_BACKEND": ("capture", "backend", "str"),
     "KK_WEBCAM_INDEX": ("capture", "webcam_index", "int"),
+    "KK_WEBCAM_API": ("capture", "webcam_api", "str"),
+    "KK_ROTATE": ("capture", "rotate", "int"),
+    "KK_WEBCAM_WIDTH": ("capture", "width", "int"),
+    "KK_WEBCAM_HEIGHT": ("capture", "height", "int"),
     "KK_MIRROR": ("capture", "mirror", "bool"),
     "KK_PROC_WIDTH": ("capture", "proc_width", "int"),
     "KK_IR_MODE": ("capture", "ir_mode", "str"),
@@ -142,6 +159,8 @@ _ENV_MAP: dict[str, tuple[str, str, str]] = {
     "KK_LOGO_LED": ("capture", "logo_led", "int"),
     "KK_LOW_LIGHT_BOOST": ("capture", "low_light_boost", "bool"),
     "KK_CROP": ("capture", "crop", "float"),
+    "KK_PAN_X": ("capture", "pan_x", "float"),
+    "KK_PAN_Y": ("capture", "pan_y", "float"),
     "KK_USE_DEPTH": ("gate", "use_depth", "bool"),
     "KK_DEPTH_MIN_M": ("gate", "depth_min_m", "float"),
     "KK_DEPTH_MAX_M": ("gate", "depth_max_m", "float"),
@@ -254,12 +273,21 @@ def load_config(path: Optional[str] = None) -> AppConfig:
     cfg.capture.exposure = cfg.capture.exposure.strip().lower()
     parse_exposure(cfg.capture.exposure)  # fail fast on a bad spec
     cfg.capture.crop = min(max(cfg.capture.crop, 1.0), 3.0)
+    # Pan is a fraction of the crop's slack, so it is bounded by construction;
+    # clamp anyway to keep a typo out of the frame geometry.
+    cfg.capture.pan_x = min(max(cfg.capture.pan_x, -1.0), 1.0)
+    cfg.capture.pan_y = min(max(cfg.capture.pan_y, -1.0), 1.0)
     cfg.playpause.pose = cfg.playpause.pose.strip().lower()
     if cfg.playpause.pose not in ("palm", "fist"):
         raise ValueError(f"playpause.pose must be palm|fist, got {cfg.playpause.pose!r}")
     cfg.mp_delegate = cfg.mp_delegate.strip().lower()
     if cfg.mp_delegate not in ("cpu", "gpu"):
         raise ValueError(f"mp_delegate must be cpu|gpu, got {cfg.mp_delegate!r}")
+    cfg.capture.rotate %= 360
+    if cfg.capture.rotate not in (0, 90, 180, 270):
+        raise ValueError(
+            f"capture.rotate must be 0|90|180|270, got {cfg.capture.rotate!r}"
+        )
     if not cfg.ha.media_entity:
         cfg.ha.media_entity = cfg.ha.volume_entity
     cfg.ha.max_volume = min(max(cfg.ha.max_volume, 0.0), 1.0)

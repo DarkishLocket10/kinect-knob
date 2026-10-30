@@ -1,7 +1,9 @@
 # Runtime dependencies — pins verified July 2026.
 mediapipe==0.10.35          # Tasks HandLandmarker; universal py3 wheel (3.13 OK); numpy 2 OK
 numpy>=2.0,<3
-opencv-contrib-python>=4.10 # the cv2 distribution mediapipe itself depends on
+opencv-contrib-python>=4.10,<5  # the cv2 distribution mediapipe itself depends on
+                                # (<5 for parity with the Tower image, which was
+                                #  built before OpenCV 5 shipped)
 fastapi>=0.111,<1
 uvicorn>=0.30,<1
 websockets>=12,<16

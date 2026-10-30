@@ -23,9 +23,7 @@ class WebcamCapture(CaptureBase):
         self._seq = 0
 
     def start(self) -> None:
-        # CAP_DSHOW avoids multi-second MSMF startup and exposure lag on Windows.
-        backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
-        cap = cv2.VideoCapture(self.cfg.webcam_index, backend)
+        cap = cv2.VideoCapture(self.cfg.webcam_index, self._api())
         if not cap.isOpened():
             raise CaptureError(
                 f"could not open webcam index {self.cfg.webcam_index} — "
@@ -36,6 +34,25 @@ class WebcamCapture(CaptureBase):
         cap.set(cv2.CAP_PROP_FPS, self.cfg.fps)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # always read the freshest frame
         self._cap = cap
+
+    def _api(self) -> int:
+        """OpenCV capture API to open with.
+
+        On Windows CAP_DSHOW historically avoided multi-second MSMF startup and
+        exposure lag, so it stays the "auto" choice. That inverts on cameras
+        behind the Intel Imaging Signal Processor (Surface Book/Pro), where
+        DSHOW delivers ~16 fps and opens slower than MSMF's full ~30 — set
+        KK_WEBCAM_API=msmf there.
+        """
+        name = (self.cfg.webcam_api or "auto").strip().lower()
+        if name == "auto":
+            return cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
+        try:
+            return {"dshow": cv2.CAP_DSHOW, "msmf": cv2.CAP_MSMF, "any": cv2.CAP_ANY}[name]
+        except KeyError:
+            raise CaptureError(
+                f"unknown webcam api {name!r} — use auto, dshow, msmf or any"
+            ) from None
 
     def read(self) -> Optional[Frame]:
         ok, bgr = self._cap.read()

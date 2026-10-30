@@ -19,8 +19,11 @@ capture:
   exposure: auto         # Kinect v2 color shutter: auto | auto:<ev> | semi:<ms> | manual:<ms>,<gain>
                          # semi:8 caps integration at 8 ms — fast hands stay sharp in dim light
   low_light_boost: true  # auto-gamma brighten dim frames before hand tracking
-  crop: 1.0              # crop-in zoom onto the frame centre: 1.0 = full view,
+  crop: 1.0              # crop-in zoom: 1.0 = full view,
                          # 2.0 = middle half only (excludes doorways/TV/passers-by)
+  pan_x: 0.0             # where the crop window sits, as a fraction of the slack:
+  pan_y: 0.0             # 0 centred, -1 flush left/top, +1 flush right/bottom.
+                         # No effect at crop 1.0 (nothing to slide within).
 
 gate:                    # who is allowed to control the knob
   use_depth: true        # needs a Kinect (depth camera)
