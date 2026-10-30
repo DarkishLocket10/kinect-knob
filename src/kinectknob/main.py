@@ -99,6 +99,7 @@ _SCHEDULE_POLL_S = 15.0
 # failing backs off instead of restarting — and flashing — every few seconds.
 _EXIT_LOG = Path("/app/data/capture_exits.json")
 _EXIT_MEMORY_S = 1800.0
+_ABSENT_REAUTH_S = 300.0    # re-authorize the hub this often while absent
 _REPLUG_AFTER = 3            # this many failure exits in memory -> replug too
 # Replugs happen at the START of the next process, when nothing holds the
 # device open — yanking it from under a live libusb handle is asking for the
@@ -323,7 +324,11 @@ class App:
         self.exit_code = EXIT_CAPTURE_FAILURE
         try:
             exits = self._recent_failure_exits() + [time.time()]
-            self._exit_log.write_text(json.dumps({"exits": exits}))
+            # Atomic: a torn write reads as "no recent failures" and would
+            # skip the back-off and the replug escalation.
+            tmp = self._exit_log.with_name(self._exit_log.name + ".tmp")
+            tmp.write_text(json.dumps({"exits": exits}))
+            tmp.replace(self._exit_log)
         except OSError:
             log.debug("could not record capture failure exit", exc_info=True)
 
@@ -429,6 +434,7 @@ class App:
         or the open failed — failures always exit, see the module docstring)."""
         absent_since: Optional[float] = None
         next_absent_log = 0.0
+        next_reauth = time.monotonic() + _ABSENT_REAUTH_S
         while not self.stop_event.is_set():
             if self.off_window.active():
                 self._stop_reason = "schedule"
@@ -462,13 +468,22 @@ class App:
                     next_absent_log = now + _ABSENT_LOG_S
                 self.shared.set_camera("absent", str(exc),
                                        waiting_s=now - absent_since)
+                if now >= next_reauth:
+                    # A failed re-authorize (at start or inside a replug)
+                    # leaves the sensor logically unplugged, which looks
+                    # exactly like "absent" — and waiting never fixes it.
+                    usb_power.set_authorized(True)
+                    next_reauth = now + _ABSENT_REAUTH_S
                 self.stop_event.wait(_ABSENT_POLL_S)
                 continue
             except CaptureError as exc:
                 # Not retried in-process: the binding's context enumerated the
                 # bus once and will keep failing the same way.
                 self.shared.set_camera("error", str(exc))
-                self._fail_exit(f"capture failed to start: {exc}")
+                # Attached at USB 2.0: no amount of reopening helps, only a
+                # replug of both hub halves (see usb_power) — do it now.
+                self._fail_exit(f"capture failed to start: {exc}",
+                                force_replug=usb_power.on_usb2())
                 return None
             except Exception:  # noqa: BLE001 — an unexpected backend blowup
                 log.exception("capture failed to start unexpectedly")

@@ -37,6 +37,18 @@ class TuningRequest(BaseModel):
     value: bool | float
 
 
+class TuningResetRequest(BaseModel):
+    key: str | None = None      # one setting; None = everything (backed up)
+
+
+class TuningRestoreRequest(BaseModel):
+    name: str | None = None     # a backup file name; None = the newest
+
+
+class TuningImportRequest(BaseModel):
+    values: dict
+
+
 def create_app(
     cfg: AppConfig,
     shared: SharedState,
@@ -112,14 +124,49 @@ def create_app(
             applied = tuning.set_value(req.key, req.value)
         except KeyError:
             return JSONResponse({"error": f"unknown key {req.key!r}"}, status_code=400)
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
         return {"key": req.key, "value": applied}
 
     @app.post("/api/tuning/reset")
-    async def tuning_reset():
+    async def tuning_reset(req: TuningResetRequest | None = None):
         if tuning is None:
             return JSONResponse({"error": "tuning unavailable"}, status_code=404)
-        tuning.reset()
-        return {"ok": True}
+        if req is not None and req.key:
+            try:
+                return {"ok": True, "key": req.key, "value": tuning.reset_key(req.key)}
+            except KeyError:
+                return JSONResponse({"error": f"unknown key {req.key!r}"}, status_code=400)
+        return {"ok": True, "backup": tuning.reset()}
+
+    @app.get("/api/tuning/export")
+    async def tuning_export():
+        if tuning is None:
+            return JSONResponse({"error": "tuning unavailable"}, status_code=404)
+        return JSONResponse(tuning.export(), headers={
+            "Content-Disposition": 'attachment; filename="kinect-knob-tuning.json"'})
+
+    @app.post("/api/tuning/import")
+    async def tuning_import(req: TuningImportRequest):
+        if tuning is None:
+            return JSONResponse({"error": "tuning unavailable"}, status_code=404)
+        applied, rejected = tuning.import_values(req.values)
+        return {"applied": applied, "rejected": rejected}
+
+    @app.get("/api/tuning/backups")
+    async def tuning_backups():
+        if tuning is None:
+            return JSONResponse({"error": "tuning unavailable"}, status_code=404)
+        return {"backups": tuning.backups()}
+
+    @app.post("/api/tuning/restore")
+    async def tuning_restore(req: TuningRestoreRequest | None = None):
+        if tuning is None:
+            return JSONResponse({"error": "tuning unavailable"}, status_code=404)
+        try:
+            return {"ok": True, "applied": tuning.restore(req.name if req else None)}
+        except FileNotFoundError as exc:
+            return JSONResponse({"error": f"no such backup: {exc}"}, status_code=404)
 
     @app.get("/api/snapshot")
     async def snapshot(frames: int = 1, format: str = "jpeg", quality: int = 92,

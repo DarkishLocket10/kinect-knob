@@ -206,3 +206,42 @@ def test_submit_overflow_drops_quietly():
         return ctl
 
     run(scenario())
+
+
+class _StubHA:
+    def __init__(self, state, feats):
+        self.states = {"media_player.spotify": {"state": state, "attributes": {"supported_features": feats}}}
+        self.calls = []
+
+    async def call_service(self, domain, service, entity, data=None):
+        self.calls.append(service)
+        return True
+
+    def volume_level(self, entity):
+        return None
+
+    def entity_state(self, entity):
+        return self.states.get(entity, {}).get("state")
+
+
+def _real_controller(state, feats):
+    cfg = AppConfig()
+    cfg.ha.media_entity = "media_player.spotify"
+    ctl = Controller(cfg, ha=_StubHA(state, feats))
+    ctl.dry_run = False
+    return ctl
+
+
+def test_playpause_asks_for_the_direction_the_state_needs():
+    for state, service in (("playing", "media_pause"), ("paused", "media_play")):
+        ctl = _real_controller(state, 1 | 16384 | 2048)
+        run(ctl._handle(PlayPauseHold(t=0.0)))
+        assert ctl.ha.calls == [service], state
+
+
+def test_playpause_on_an_idle_spotify_says_so_instead_of_failing():
+    """2026-10: 75/75 gestures failed with 'does not support media_play_pause'."""
+    ctl = _real_controller("idle", 2048)
+    run(ctl._handle(PlayPauseHold(t=0.0)))
+    assert ctl.ha.calls == []
+    assert "nothing to resume" in " ".join(ctl.events_log)

@@ -273,3 +273,58 @@ def test_failures_replug_once_they_pile_up(tmp_path, monkeypatch):
     app._exit_log.unlink()
     app._fail_exit("wedged", force_replug=True)  # wedged always replugs
     assert replugs == [1, 1]
+
+
+def _hub_pair(tmp_path, sensor_on="4"):
+    """usb4 (SuperSpeed) and usb3 (its USB 2.0 companion), each with a half
+    of the Kinect hub; the sensor hangs under whichever half it attached to."""
+    for bus, speed in (("4", "5000"), ("3", "480")):
+        root = tmp_path / f"usb{bus}"
+        hub = root / f"{bus}-1"
+        hub.mkdir(parents=True)
+        for f, v in (("idVendor", "045e"), ("idProduct", "02d9"), ("authorized", "1"), ("speed", speed)):
+            (hub / f).write_text(v + "\n")
+        if bus == sensor_on:
+            sensor = hub / f"{bus}-1.1"
+            sensor.mkdir()
+            for f, v in (("idVendor", "045e"), ("idProduct", "02c4"), ("authorized", "1"), ("speed", speed)):
+                (sensor / f).write_text(v + "\n")
+    return tmp_path / "usb4", tmp_path / "usb3"
+
+
+def test_replug_covers_both_hub_halves_superspeed_first(tmp_path, monkeypatch):
+    from kinectknob.capture import usb_power
+
+    ss, hs = _hub_pair(tmp_path)
+    monkeypatch.setenv("KK_USB_SYSFS_MOUNT", str(ss))
+    monkeypatch.setenv("KK_USB_SYSFS_MOUNT2", str(hs))
+    monkeypatch.setattr(usb_power.time, "sleep", lambda s: None)
+    order = []
+    real_write = type(ss).write_text
+
+    def spy(self, data, *a, **k):
+        if self.name == "authorized":
+            order.append((self.parent.name, data))
+        return real_write(self, data, *a, **k)
+    monkeypatch.setattr(type(ss), "write_text", spy)
+    assert [p.name for p in usb_power.kinect_nodes()] == ["4-1", "3-1"]
+    assert usb_power.replug(off_s=0)
+    assert order == [("4-1", "0"), ("3-1", "0"), ("4-1", "1"), ("3-1", "1")]
+
+
+def test_a_sensor_on_the_usb2_twin_is_recognised(tmp_path, monkeypatch):
+    from kinectknob.capture import usb_power
+
+    ss, hs = _hub_pair(tmp_path, sensor_on="3")
+    monkeypatch.setenv("KK_USB_SYSFS_MOUNT", str(ss))
+    monkeypatch.setenv("KK_USB_SYSFS_MOUNT2", str(hs))
+    assert usb_power.sensor_speeds() == [480] and usb_power.on_usb2()
+
+
+def test_a_superspeed_sensor_is_fine(tmp_path, monkeypatch):
+    from kinectknob.capture import usb_power
+
+    ss, hs = _hub_pair(tmp_path, sensor_on="4")
+    monkeypatch.setenv("KK_USB_SYSFS_MOUNT", str(ss))
+    monkeypatch.setenv("KK_USB_SYSFS_MOUNT2", str(hs))
+    assert usb_power.sensor_speeds() == [5000] and not usb_power.on_usb2()

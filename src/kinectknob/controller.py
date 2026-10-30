@@ -37,6 +37,8 @@ log = logging.getLogger("kk.ctl")
 # The Bose Music family (Soundbar 700) uses integer 0-100 volume internally,
 # so quantise to 0.01 — sub-step sends would be no-ops that just add traffic.
 VOLUME_QUANTUM = 0.01
+_FEAT_PAUSE = 1        # MediaPlayerEntityFeature.PAUSE
+_FEAT_PLAY = 16384     # MediaPlayerEntityFeature.PLAY
 
 
 class Controller:
@@ -138,8 +140,41 @@ class Controller:
             await self._call("media_player", service, self.cfg.ha.media_entity)
 
         elif isinstance(ev, PlayPauseHold):
-            self._log_event("play/pause")
-            await self._call("media_player", "media_play_pause", self.cfg.ha.media_entity)
+            await self._play_pause("play/pause")
+
+    def _play_pause_service(self) -> tuple[Optional[str], str]:
+        """The service that actually toggles playback right now, or None when
+        the player has nothing to resume.
+
+        ``media_play_pause`` failed on every one of 75 gestures (2026-10-26..30):
+        an idle Spotify entity advertises only SELECT_SOURCE (2048), so HA
+        rejects it. Ask for the direction the state calls for instead, and say
+        plainly when there is nothing to play."""
+        if self.ha is None:
+            return "media_play_pause", ""
+        st = self.ha.states.get(self.cfg.ha.media_entity) or {}
+        state = st.get("state")
+        try:
+            feats = int(st.get("attributes", {}).get("supported_features") or 0)
+        except (TypeError, ValueError):
+            feats = 0
+        can_pause, can_play = feats & _FEAT_PAUSE, feats & _FEAT_PLAY
+        if state == "playing":
+            return ("media_pause" if can_pause or not feats else "media_play_pause"), state
+        if state == "paused":
+            return ("media_play" if can_play or not feats else "media_play_pause"), state
+        if feats and not (can_play or can_pause):
+            return None, state or "unknown"
+        return "media_play_pause", state or "unknown"
+
+    async def _play_pause(self, label: str) -> None:
+        service, state = self._play_pause_service()
+        if service is None:
+            self._log_event(f"{label}: nothing to resume (player {state})")
+            return
+        self._log_event(label if not state else f"{label} ({state} -> "
+                        f"{'paused' if service == 'media_pause' else 'playing' if service == 'media_play' else 'toggle'})")
+        await self._call("media_player", service, self.cfg.ha.media_entity)
 
     async def _relative_turn(self, ev: KnobTurn) -> None:
         """No anchor available: emit volume_up/down per detent of rotation.
@@ -183,12 +218,16 @@ class Controller:
         if self._last_sent is not None and abs(target - self._last_sent) < VOLUME_QUANTUM / 2:
             return  # same quantised step — sending it again is a no-op
         self._last_send_t = now
-        self._last_sent = target
-        await self._call(
-            "media_player", "volume_set", self.cfg.ha.volume_entity, {"volume_level": target}
-        )
+        # Remember the target only once it landed: a dropped final send used
+        # to leave the volume at the last intermediate step with the dedup
+        # blocking any resend.
+        for _attempt in range(2 if force else 1):
+            if await self._call("media_player", "volume_set",
+                                self.cfg.ha.volume_entity, {"volume_level": target}):
+                self._last_sent = target
+                return
 
-    async def _call(self, domain: str, service: str, entity: str, data: Optional[dict] = None) -> None:
+    async def _call(self, domain: str, service: str, entity: str, data: Optional[dict] = None) -> bool:
         if self.dry_run:
             if service == "volume_set" and data:
                 self._sim_volume = data["volume_level"]
@@ -197,11 +236,11 @@ class Controller:
             elif service == "volume_down":
                 self._sim_volume = max(0.0, self._sim_volume - 0.02)
             log.info("[dry-run] %s.%s %s %s", domain, service, entity or "(no entity)", data or "")
-            return
+            return True
         if not entity:
             log.warning("no entity configured for %s.%s", domain, service)
-            return
-        await self.ha.call_service(domain, service, entity, data)
+            return False
+        return bool(await self.ha.call_service(domain, service, entity, data))
 
     # ------------------------------------------------------------------
     async def manual(self, action: str) -> bool:
@@ -216,6 +255,9 @@ class Controller:
         }
         if action not in table:
             return False
+        if action == "play_pause":
+            await self._play_pause("manual: play/pause")
+            return True
         service, entity, data = table[action]
         self._log_event(f"manual: {action}")
         await self._call("media_player", service, entity, data)

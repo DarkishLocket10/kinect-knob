@@ -21,17 +21,20 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from .config import AppConfig
 
 log = logging.getLogger("kk.tune")
 
 _DEFAULT_PATH = "/app/data/tuning.json"
+BACKUPS_KEPT = 20
 
 
 @dataclass(frozen=True)
@@ -443,6 +446,17 @@ class Tuning:
         # Baseline = whatever defaults + yaml + env produced; "reset" returns
         # here, and only deltas from it are written to disk.
         self._base: dict[str, Any] = {t.key: self._get(t.key) for t in TUNABLES}
+        # Keys the user has explicitly set. Persisted with their values even
+        # when they equal today's baseline: a hand-tuned value must never
+        # drift because a code default or an env var changed underneath it.
+        self._pinned: set[str] = set()
+        # Keys in the file this version doesn't know (renamed/removed, or from
+        # a newer version). Carried through every save untouched, so rolling
+        # back a deploy never loses them.
+        self._foreign: dict[str, Any] = {}
+        # Saved values outside today's slider range: applied clamped, but the
+        # file keeps the original until the user moves that slider.
+        self._raw_kept: dict[str, Any] = {}
         self._load()
 
     # -- config access -------------------------------------------------
@@ -459,6 +473,8 @@ class Tuning:
         if spec.kind == "bool":
             return bool(value)
         v = float(value)
+        if not math.isfinite(v):
+            raise ValueError(f"{spec.key}: not a finite number")
         v = min(max(v, spec.min), spec.max)
         return int(round(v)) if spec.kind == "int" else round(v, 4)
 
@@ -483,19 +499,99 @@ class Tuning:
                 v = self._apply_pair_rails(key, v)
                 v = self._coerce(spec, v)  # rails could push past range ends
             self._put(key, v)
+            self._pinned.add(key)
+            self._raw_kept.pop(key, None)
             self._save_locked()
             log.info("tuning: %s = %s", key, v)
             return v
 
-    def reset(self) -> None:
+    def reset_key(self, key: str) -> Any:
+        """Return one setting to its baseline and stop pinning it."""
+        if key not in _SPEC:
+            raise KeyError(key)
         with self._lock:
+            self._put(key, self._base[key])
+            self._pinned.discard(key)
+            self._raw_kept.pop(key, None)
+            self._save_locked()
+            log.info("tuning: %s reset to %s", key, self._base[key])
+            return self._base[key]
+
+    def reset(self) -> str | None:
+        """Everything back to baseline. The current file is copied to a
+        timestamped backup first (returned), so a reset can be undone with
+        ``restore()`` — it used to delete hand-tuned values outright."""
+        with self._lock:
+            backup = self._backup_locked("reset")
             for key, value in self._base.items():
                 self._put(key, value)
+            self._pinned.clear()
+            self._raw_kept.clear()
             try:
-                self.path.unlink(missing_ok=True)
+                if self._foreign:
+                    self._save_locked()
+                else:
+                    self.path.unlink(missing_ok=True)
             except OSError:
                 log.warning("could not remove %s", self.path, exc_info=True)
-            log.info("tuning: reset to baseline")
+            log.info("tuning: reset to baseline (backup: %s)", backup)
+            return backup
+
+    def export(self) -> dict[str, Any]:
+        """The saved overrides, exactly as tuning.json holds them."""
+        with self._lock:
+            return self._deltas_locked()
+
+    def import_values(self, values: dict[str, Any],
+                      why: str = "import") -> tuple[dict, dict]:
+        """Apply a dict of overrides through the normal validation. Returns
+        (applied, rejected). Backs up the current file first."""
+        with self._lock:
+            self._backup_locked(why)
+        applied, rejected = {}, {}
+        for key, value in values.items():
+            try:
+                applied[key] = self.set_value(key, value)
+            except KeyError:
+                rejected[key] = "unknown setting"
+            except (TypeError, ValueError) as exc:
+                rejected[key] = str(exc)
+        return applied, rejected
+
+    def backups(self) -> list[str]:
+        return sorted((p.name for p in self.path.parent.glob(
+            self.path.stem + ".backup-*.json")), reverse=True)
+
+    def restore(self, name: str | None = None) -> dict[str, Any]:
+        """Re-apply a backup (default: the newest). Returns what was applied."""
+        names = self.backups()
+        if name is None:
+            # The newest backup a person would mean: not the one a previous
+            # restore took of itself (that would just flip-flop).
+            usable = [n for n in names if not n.endswith("-restore.json")]
+            if not usable:
+                raise FileNotFoundError("no tuning backups")
+            name = usable[0]
+        if name not in names:   # only our own backup files, never arbitrary paths
+            raise FileNotFoundError(name)
+        data = json.loads((self.path.parent / name).read_text())
+        applied, _ = self.import_values(data, why="restore")
+        log.info("tuning: restored %d value(s) from %s", len(applied), name)
+        return applied
+
+    def _backup_locked(self, why: str) -> str | None:
+        if not self.path.is_file():
+            return None
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        dest = self.path.with_name(f"{self.path.stem}.backup-{stamp}-{why}.json")
+        try:
+            dest.write_bytes(self.path.read_bytes())
+        except OSError:
+            log.warning("could not back up %s", self.path, exc_info=True)
+            return None
+        for old in self.backups()[BACKUPS_KEPT:]:
+            (self.path.parent / old).unlink(missing_ok=True)
+        return dest.name
 
     def schema(self) -> list[dict]:
         """Full schema + live values for the dashboard, in display order."""
@@ -504,39 +600,109 @@ class Tuning:
             d = asdict(t)
             d["value"] = self._get(t.key)
             d["default"] = self._base[t.key]
+            d["pinned"] = t.key in self._pinned
             out.append(d)
         return out
 
     # -- persistence ----------------------------------------------------
+    def _deltas_locked(self) -> dict[str, Any]:
+        out = dict(self._foreign)
+        out.update({key: self._get(key) for key in _SPEC
+                    if key in self._pinned or self._get(key) != self._base[key]})
+        out.update(self._raw_kept)
+        return out
+
     def _save_locked(self) -> None:
-        deltas = {
-            key: self._get(key)
-            for key in _SPEC
-            if self._get(key) != self._base[key]
-        }
+        deltas = self._deltas_locked()
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(deltas, indent=2, sort_keys=True))
-            tmp.replace(self.path)
+            _write_durable(self.path, json.dumps(deltas, indent=2, sort_keys=True))
         except OSError:
             # Tuning still applies live; it just won't survive a restart.
             log.warning("could not persist tuning to %s", self.path, exc_info=True)
 
+    @property
+    def _lastgood(self) -> Path:
+        return self.path.with_name(self.path.stem + ".lastgood.json")
+
+    def _read_file(self, path: Path) -> Optional[dict]:
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
     def _load(self) -> None:
+        """Apply the saved overrides. A damaged file (a hard freeze mid-save,
+        a bad hand edit) is moved aside — never overwritten — and the last
+        copy that loaded cleanly is used instead. Before this, the next slider
+        move rewrote the file with one key and every other value was gone."""
         if not self.path.is_file():
             return
-        try:
-            data = json.loads(self.path.read_text())
-        except (OSError, ValueError):
-            log.warning("ignoring unreadable tuning file %s", self.path, exc_info=True)
-            return
+        data = self._read_file(self.path)
+        if data is None:
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            bad = self.path.with_name(f"{self.path.stem}.corrupt-{stamp}.json")
+            try:
+                self.path.replace(bad)
+            except OSError:
+                log.warning("could not move aside %s", self.path, exc_info=True)
+            data = self._read_file(self._lastgood)
+            log.error("tuning file %s was unreadable (kept as %s); %s", self.path,
+                      bad.name, "using the last good copy" if data is not None
+                      else "no last good copy — running on defaults")
+            if data is None:
+                return
+            recovered = True
+        else:
+            recovered = False
         applied = 0
         for key, value in data.items():
             spec = _SPEC.get(key)
             if spec is None:
-                continue  # stale key from an older version — ignore
-            self._put(key, self._coerce(spec, value))
+                # stale key from an older version (or one from a newer one):
+                # not applied, but kept in the file — see _foreign
+                self._foreign[key] = value
+                continue
+            try:
+                v = self._coerce(spec, value)
+            except (TypeError, ValueError):
+                log.warning("tuning: ignoring bad saved value %s=%r", key, value)
+                self._foreign[key] = value
+                continue
+            if spec.kind != "bool" and v != value:
+                log.warning("tuning: saved %s=%r is outside today's range; "
+                            "using %r (the file keeps %r)", key, value, v, value)
+                self._raw_kept[key] = value   # never overwrite the hand-tuned value
+            self._put(key, v)
+            self._pinned.add(key)
             applied += 1
         if applied:
             log.info("applied %d saved tuning override(s) from %s", applied, self.path)
+        with self._lock:
+            if recovered:
+                self._save_locked()
+            try:
+                if self.path.is_file():
+                    _write_durable(self._lastgood, self.path.read_text())
+            except OSError:
+                log.debug("could not refresh %s", self._lastgood, exc_info=True)
+
+
+def _write_durable(path: Path, text: str) -> None:
+    """Write-aside, fsync, rename, fsync the directory: after a hard freeze
+    the file is either the old version or the new one, never empty."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    tmp.replace(path)
+    try:
+        fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass

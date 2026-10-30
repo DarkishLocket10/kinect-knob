@@ -164,8 +164,16 @@ class KinectV2Capture(CaptureBase):
                 raise DeviceAbsent(
                     f"Kinect v2 is not on the USB bus ({exc})"
                 ) from exc
+            from . import usb_power
+
+            if usb_power.on_usb2():
+                raise CaptureError(
+                    "Kinect v2 is attached at USB 2.0 speed (480 Mb/s, on the "
+                    "hub's USB 2.0 twin) and cannot stream; both hub halves "
+                    f"will be replugged ({exc})") from exc
             raise CaptureError(
-                "Kinect v2 not found. Check: Kinect Adapter for Windows powered, "
+                "Kinect v2 is on the USB bus but could not be opened. Check: "
+                "Kinect Adapter for Windows powered, "
                 "plugged into a USB 3.0 port (Intel/Renesas controller — ASMedia "
                 "does not work), and /dev/bus/usb passed into the container. "
                 f"({exc})"

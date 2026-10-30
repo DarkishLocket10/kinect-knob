@@ -39,6 +39,13 @@ services:
       - type: bind
         source: ${KK_USB_SYSFS:-/sys/bus/usb/devices/usb4}
         target: /host-usb
+      # ...and the same controller's USB 2.0 companion bus. The Kinect's hub
+      # enumerates on both; replugging only the SuperSpeed half once left the
+      # sensor stuck on the 2.0 twin for 5.4 h (2026-10-27). See usb_power.py.
+      # Same `lsusb -t` rule: the 480M bus on the Kinect's controller.
+      - type: bind
+        source: ${KK_USB_SYSFS2:-/sys/bus/usb/devices/usb3}
+        target: /host-usb2
       # Optional deep tuning: copy config.example.yaml to config.yaml, edit,
       # then uncomment this line AND set KK_CONFIG=/app/config.yaml in .env.
       # - ./config.yaml:/app/config.yaml:ro

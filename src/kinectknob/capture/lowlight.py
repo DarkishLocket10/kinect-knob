@@ -15,6 +15,11 @@ from __future__ import annotations
 
 import numpy as np
 
+try:
+    import cv2
+except ImportError:  # pragma: no cover — tests may run without OpenCV
+    cv2 = None
+
 TRIGGER_LUMA = 90.0    # frames brighter than this pass through untouched
 TARGET_LUMA = 110.0    # dim frames are lifted toward this mean
 MIN_EXPONENT = 0.45    # brightening cap (≈ gamma 2.2)
@@ -50,4 +55,6 @@ class LowLightBoost:
                 ((np.arange(256) / 255.0) ** self._exponent) * 255.0
             ).astype(np.uint8)
             self._lut_exponent = self._exponent
+        if cv2 is not None and rgb.dtype == np.uint8:
+            return cv2.LUT(rgb, self._lut)   # ~10x numpy fancy indexing per frame
         return self._lut[rgb]
