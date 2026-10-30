@@ -326,3 +326,81 @@ def test_region_occupancy_survives_depth_dropouts():
         rp.update(blocked, now=1.0)
         out = rp.occupancy(100, 200, 960, 800)
     assert out["occupancy"] > 0.05
+
+
+# -- remembering the empty room across restarts (2026-10-30) ------------------
+
+from kinectknob.presence import SAVE_EMPTY_S, BackgroundStore  # noqa: E402
+
+
+def _learn_empty_room(tmp_path, t0=0.0):
+    det = DepthPresence(warmup_s=0.0)
+    det.store = BackgroundStore(tmp_path, "room")
+    settle(det, wall(), t0, int(SAVE_EMPTY_S / 0.5) + 4)
+    assert list(tmp_path.glob("room-*.npy")), "an empty room must get saved"
+    return det
+
+
+def test_a_restart_while_someone_sits_there_still_sees_them(tmp_path):
+    """THE regression: the process restarted while Yash sat at the boards, the
+    new process seeded from that frame, and he became wall."""
+    _learn_empty_room(tmp_path)
+    fresh = DepthPresence(warmup_s=0.0)
+    fresh.store = BackgroundStore(tmp_path, "room")
+    res, _ = settle(fresh, with_body(wall()), 0.0, 4)
+    assert fresh.restored and fresh.present and res.occupancy > 0.2
+
+
+def test_without_a_saved_room_the_old_seeding_still_applies(tmp_path):
+    fresh = DepthPresence(warmup_s=0.0)
+    fresh.store = BackgroundStore(tmp_path, "room")
+    res, _ = settle(fresh, with_body(wall()), 0.0, 4)
+    assert not fresh.restored and res.occupancy == 0.0
+
+
+def test_a_saved_room_from_another_camera_pose_is_discarded(tmp_path):
+    _learn_empty_room(tmp_path)
+    moved = wall(mm=3200.0)                 # everything now FARTHER: camera moved
+    fresh = DepthPresence(warmup_s=0.0)
+    fresh.store = BackgroundStore(tmp_path, "room")
+    res, _ = settle(fresh, moved, 0.0, 4)
+    assert not fresh.restored and res.occupancy == 0.0
+
+
+def test_nothing_is_saved_while_someone_is_there(tmp_path):
+    det = DepthPresence(warmup_s=0.0, linger_s=5.0)
+    det.store = BackgroundStore(tmp_path, "room")
+    _, t = settle(det, wall(), 0.0, 2)
+    settle(det, with_body(wall()), t, int(SAVE_EMPTY_S / 0.5) + 4)
+    assert not list(tmp_path.glob("room-*.npy"))
+
+
+def test_relearn_forgets_the_saved_room_too(tmp_path):
+    det = _learn_empty_room(tmp_path)
+    det.force_relearn()
+    assert not list(tmp_path.glob("room-*.npy"))
+
+
+def test_the_ir_switch_keeps_each_shapes_model(tmp_path):
+    """Lights off changes the depth map's shape; switching back must not
+    reseed from whoever is sitting there."""
+    det = DepthPresence(warmup_s=0.0)
+    _, t = settle(det, wall(), 0.0, 4)                    # learn 120x160
+    _, t = settle(det, wall(h=60, w=80), t, 4)            # IR mode shape
+    res, _ = settle(det, with_body(wall()), t, 2)         # back, someone sitting
+    assert res.occupancy > 0.2
+
+
+def test_region_plane_survives_a_restart_with_someone_at_the_board(tmp_path):
+    rp = RegionPresence(decim=1, min_interval_s=0.0)
+    rp.store = BackgroundStore(tmp_path, "regions")
+    t = 0.0
+    while t < SAVE_EMPTY_S + 5:
+        rp.update(wall(), t)
+        t += 1.0
+    assert list(tmp_path.glob("regions-*.npy"))
+    fresh = RegionPresence(decim=1, min_interval_s=0.0)
+    fresh.store = BackgroundStore(tmp_path, "regions")
+    fresh.update(with_body(wall(), frac=0.5), 0.0)
+    h, w = wall().shape
+    assert fresh.restored and fresh.occupancy(0, 0, w, h)["occupancy"] > 0.3

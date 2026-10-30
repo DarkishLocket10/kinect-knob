@@ -96,6 +96,14 @@ TUNABLES: tuple[Tunable, ...] = (
         "bool", "Volume limits & feel",
     ),
     Tunable(
+        "ha.ignore_grips_when_off", "Ignore grips while the soundbar is off",
+        "While the soundbar reads off, standby or unavailable, a grip does "
+        "nothing. 78% of grips over four days in October happened with it off "
+        "(mostly false grips, often several a second), each sending blind "
+        "volume-down nudges. Swipes and play/pause are not affected.",
+        "bool", "Volume limits & feel",
+    ),
+    Tunable(
         "capture.proc_width", "Tracking resolution",
         "Frame width (pixels) the hand tracker runs on. Lower = every frame "
         "processes faster and latency drops, but small/distant hands get "

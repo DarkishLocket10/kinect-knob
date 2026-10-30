@@ -119,6 +119,7 @@ class FakeHA:
         self.connected = True
         self.last_error = ""
         self.calls = []
+        self.connected, self.last_error = True, ""
 
     async def call_service(self, domain, service, entity_id, data=None):
         self.calls.append((service, data))
@@ -212,6 +213,7 @@ class _StubHA:
     def __init__(self, state, feats):
         self.states = {"media_player.spotify": {"state": state, "attributes": {"supported_features": feats}}}
         self.calls = []
+        self.connected, self.last_error = True, ""
 
     async def call_service(self, domain, service, entity, data=None):
         self.calls.append(service)
@@ -222,6 +224,9 @@ class _StubHA:
 
     def entity_state(self, entity):
         return self.states.get(entity, {}).get("state")
+
+    def state_updated_at(self, entity):
+        return None
 
 
 def _real_controller(state, feats):
@@ -245,3 +250,47 @@ def test_playpause_on_an_idle_spotify_says_so_instead_of_failing():
     run(ctl._handle(PlayPauseHold(t=0.0)))
     assert ctl.ha.calls == []
     assert "nothing to resume" in " ".join(ctl.events_log)
+
+
+class _BoseHA(_StubHA):
+    def __init__(self, bose_state):
+        super().__init__("idle", 2048)
+        self.states["media_player.bose"] = {"state": bose_state, "attributes": {"volume_level": 0.1}}
+
+    def volume_level(self, entity):
+        return 0.1
+
+
+def _bose_controller(state, gate=True):
+    cfg = AppConfig()
+    cfg.ha.volume_entity = "media_player.bose"
+    cfg.ha.media_entity = "media_player.spotify"
+    cfg.ha.ignore_grips_when_off = gate
+    ctl = Controller(cfg, ha=_BoseHA(state))
+    ctl.dry_run = False
+    return ctl
+
+
+def _grip_and_twist(ctl):
+    async def scenario():
+        for t in (0.0, 1.0):
+            await ctl._handle(KnobEngage(t=t))
+            await ctl._handle(KnobTurn(t=t + 0.1, deg=-90.0, delta_deg=-90.0))
+            await ctl._flush_volume(force=True)
+            await ctl._handle(KnobRelease(t=t + 0.2, deg=-90.0))
+    run(scenario())
+
+
+def test_grips_do_nothing_while_the_soundbar_is_off():
+    ctl = _bose_controller("off")
+    _grip_and_twist(ctl)
+    assert ctl.ha.calls == []
+    log = " ".join(ctl.events_log)
+    assert log.count("grips ignored") == 1 and "knob released" not in log
+    assert ctl.snapshot()["grips_ignored"] is True
+
+
+def test_grips_work_when_the_soundbar_is_on_or_the_gate_is_off():
+    for ctl in (_bose_controller("on"), _bose_controller("off", gate=False)):
+        _grip_and_twist(ctl)
+        assert "volume_set" in ctl.ha.calls

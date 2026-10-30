@@ -220,3 +220,23 @@ over the README where they differ.
   icon media buttons, debug stream only while its section is open, tuning in
   columns with search, "only changed", defaults under each slider, undo on
   every reset, export/import/restore.
+
+## Presence remembers the empty room; grips ignored while the soundbar is off (2026-10-30)
+
+- Both presence models (whole-room `DepthPresence`, board-region
+  `RegionPresence`) used to seed their background from the FIRST depth frame
+  of every process, so whoever sat in view became "wall" until they left —
+  and the process restarts ~0.7/h on USB stalls while the user sits at the
+  boards. /api/presence then called the boards clear, and whiteboard-sync now
+  trusts that over the model's own "obstructed" flag. Now each model is saved
+  to `data/presence/{room,regions}-<h>x<w>.npy` (`KK_PRESENCE_DIR`) once the
+  scene has read EMPTY for `SAVE_EMPTY_S` (120 s), at most every 10 min, and
+  reloaded on start. Load check: an empty-room model is never FARTHER than
+  the live scene, a person only reads nearer — so >15% of pixels reading
+  farther means the camera/room moved and the copy is discarded (old seeding).
+  Models are also kept per depth shape, so the IR night switch no longer
+  re-seeds. Relearn deletes the saved copies.
+- `ha.ignore_grips_when_off` (dashboard toggle, default on): while the
+  volume entity is off/standby/unavailable a grip does nothing and the event
+  log says so once. 78% of 3,386 grips (10-26..30) happened with the soundbar
+  off. Unknown state (no HA data, dry-run) never blocks.

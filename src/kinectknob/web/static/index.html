@@ -326,7 +326,8 @@ async function tick() {
   $('angText').textContent = e.state === 'engaged' ? (e.angle_deg > 0 ? '+' : '') + e.angle_deg + '°' : '';
   $('stateText').textContent = e.state;
   $('stateText').className = 'statebar state-' + e.state;
-  $('volNote').textContent = (vol === null || vol === undefined)
+  $('volNote').textContent = c.grips_ignored ? 'soundbar is ' + c.soundbar_state + ': grips ignored'
+    : (vol === null || vol === undefined)
     ? 'soundbar hasn’t reported its volume: twisting nudges in steps'
     : 'ceiling ' + Math.round((ceil ?? 0) * 100) + '% (shaded)';
 

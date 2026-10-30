@@ -37,6 +37,7 @@ log = logging.getLogger("kk.ctl")
 # The Bose Music family (Soundbar 700) uses integer 0-100 volume internally,
 # so quantise to 0.01 — sub-step sends would be no-ops that just add traffic.
 VOLUME_QUANTUM = 0.01
+_OFF_STATES = frozenset({"off", "standby", "unavailable"})
 _FEAT_PAUSE = 1        # MediaPlayerEntityFeature.PAUSE
 _FEAT_PLAY = 16384     # MediaPlayerEntityFeature.PLAY
 
@@ -52,6 +53,8 @@ class Controller:
         self._anchor: Optional[float] = None       # volume at engage
         self._pending: Optional[float] = None      # latest desired volume
         self._last_sent: Optional[float] = None
+        self._grip_ignored = False   # the current grip was dropped (soundbar off)
+        self._off_noted = False      # "grips ignored" logged for this off stretch
         self._last_send_t = 0.0
         self._engaged = False
         self._relative_accum = 0.0                 # degrees, for relative fallback
@@ -102,6 +105,15 @@ class Controller:
     # ------------------------------------------------------------------
     async def _handle(self, ev: GestureEvent) -> None:
         if isinstance(ev, KnobEngage):
+            if self._soundbar_off():
+                # Nothing to turn: drop the grip and everything it would send.
+                self._grip_ignored = True
+                if not self._off_noted:
+                    self._off_noted = True
+                    self._log_event("grips ignored: soundbar is off")
+                return
+            self._off_noted = False
+            self._grip_ignored = False
             self._engaged = True
             self._relative_accum = 0.0
             self._anchor = self._anchor_volume()
@@ -124,6 +136,9 @@ class Controller:
                 await self._relative_turn(ev)
 
         elif isinstance(ev, KnobRelease):
+            if self._grip_ignored and not self._engaged:
+                self._grip_ignored = False
+                return
             self._engaged = False
             await self._flush_volume(force=True)
             final = self._pending if self._pending is not None else self._current_volume()
@@ -175,6 +190,13 @@ class Controller:
         self._log_event(label if not state else f"{label} ({state} -> "
                         f"{'paused' if service == 'media_pause' else 'playing' if service == 'media_play' else 'toggle'})")
         await self._call("media_player", service, self.cfg.ha.media_entity)
+
+    def _soundbar_off(self) -> bool:
+        """Is the volume entity off/asleep, with the gate enabled? Unknown
+        (no HA state yet, dry-run) is NOT off: never block on missing data."""
+        if not self.cfg.ha.ignore_grips_when_off or self.ha is None:
+            return False
+        return self.ha.entity_state(self.cfg.ha.volume_entity) in _OFF_STATES
 
     async def _relative_turn(self, ev: KnobTurn) -> None:
         """No anchor available: emit volume_up/down per detent of rotation.
@@ -298,5 +320,7 @@ class Controller:
             "volume_entity": self.cfg.ha.volume_entity,
             "media_entity": self.cfg.ha.media_entity,
             "media_state": self.ha.entity_state(self.cfg.ha.media_entity) if self.ha else None,
+            "soundbar_state": self.ha.entity_state(self.cfg.ha.volume_entity) if self.ha else None,
+            "grips_ignored": self._soundbar_off(),
             "events": list(self.events_log),
         }

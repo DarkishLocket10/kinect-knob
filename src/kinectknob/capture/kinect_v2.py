@@ -38,7 +38,7 @@ import cv2
 import numpy as np
 
 from ..config import CaptureConfig
-from ..presence import RegionPresence
+from ..presence import RegionPresence, default_store
 from ..types import Frame
 from .base import CaptureBase, CaptureError, DeviceAbsent, DeviceWedged
 from .ir import IrAutoSwitch, ir_to_rgb
@@ -141,6 +141,9 @@ class KinectV2Capture(CaptureBase):
         # region, which shows up here and never moved the old percentile test.
         self._region_presence = RegionPresence(
             fg_gap_mm=_REGION_GAP_MM, decim=4, min_interval_s=1.0)
+        # The board/wall plane survives restarts: re-learning it from the
+        # first frame absorbed whoever sat at the boards (see presence.py).
+        self._region_presence.store = default_store("regions")
         # ir_mode is fixed for the process lifetime, so the needed-frames set is too.
         need_ir = cfg.ir_mode != "off"
         self._needed = frozenset(

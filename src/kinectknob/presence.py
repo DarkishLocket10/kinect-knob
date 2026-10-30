@@ -49,12 +49,99 @@ half-occluded line and a garbage Todoist task.
 """
 from __future__ import annotations
 
+import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
+
+log = logging.getLogger("kk.presence")
+
+# -- remembering the empty room across restarts --------------------------------
+# A fresh process used to seed both background models from whatever the first
+# depth frame showed. Anybody sitting in view became "wall" until they moved
+# away — and Yash sits nearly still at the boards for hours while the process
+# restarts ~0.7 times an hour on USB stalls. For that whole stretch
+# /api/presence called his board clear, and whiteboard-sync trusts that signal
+# over the vision model's own "obstructed" flag. So the models are saved once
+# the room has read EMPTY for a while, and reloaded on start.
+SAVE_EMPTY_S = 120.0     # the scene must have read empty this long before a save
+SAVE_EVERY_S = 600.0     # ...and saves are at most this frequent
+# Load-time sanity check. An EMPTY-room model can never be FARTHER than what
+# the sensor sees now (nothing behind the wall); a person or a new object only
+# ever reads NEARER. So a saved model that much of the live scene reads
+# farther than is from a different camera pose / room layout: discard it.
+LOAD_MAX_FARTHER = 0.15
+
+
+class BackgroundStore:
+    """Atomic .npy files under ``directory``, one per model + depth shape.
+    ``directory=None`` disables persistence (tests, dev boxes)."""
+
+    def __init__(self, directory: Optional[os.PathLike], name: str):
+        self.dir = Path(directory) if directory else None
+        self.name = name
+
+    def _path(self, shape: tuple) -> Optional[Path]:
+        if self.dir is None:
+            return None
+        return self.dir / f"{self.name}-{'x'.join(str(int(n)) for n in shape[:2])}.npy"
+
+    def load(self, shape: tuple) -> Optional[np.ndarray]:
+        p = self._path(shape)
+        if p is None or not p.is_file():
+            return None
+        try:
+            arr = np.load(p, allow_pickle=False)
+        except (OSError, ValueError):
+            log.warning("ignoring unreadable presence background %s", p.name)
+            return None
+        return arr.astype(np.float32) if arr.ndim == 2 else None
+
+    def save(self, arr: np.ndarray, shape: tuple) -> bool:
+        p = self._path(shape)
+        if p is None:
+            return False
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_name(p.name + ".tmp")
+            with open(tmp, "wb") as f:
+                np.save(f, arr.astype(np.float32), allow_pickle=False)
+                f.flush()
+                os.fsync(f.fileno())
+            tmp.replace(p)
+            return True
+        except OSError:
+            log.warning("could not save presence background %s", p.name, exc_info=True)
+            return False
+
+    def clear(self) -> None:
+        if self.dir is None or not self.dir.is_dir():
+            return
+        for p in self.dir.glob(f"{self.name}-*.npy"):
+            p.unlink(missing_ok=True)
+
+
+def default_store(name: str) -> BackgroundStore:
+    """The deployment's store: data/presence next to tuning.json."""
+    return BackgroundStore(os.environ.get("KK_PRESENCE_DIR", "/app/data/presence"), name)
+
+
+def _plausible(saved: np.ndarray, d: np.ndarray, valid: np.ndarray,
+               gap_mm: float, unknown: float) -> bool:
+    """Could ``saved`` be the empty version of the live frame ``d``?"""
+    if saved.shape != d.shape:
+        return False
+    usable = valid & (saved > 0) & (saved != unknown)
+    n = int(usable.sum())
+    if n < 0.2 * d.size:
+        return False
+    farther = usable & ((d - saved) >= gap_mm)
+    return float(farther.sum()) / n <= LOAD_MAX_FARTHER
 
 
 @dataclass
@@ -121,6 +208,12 @@ class DepthPresence:
         self._lock = threading.Lock()
         self._bg: Optional[np.ndarray] = None
         self._bg_shape: Optional[tuple] = None
+        # Models for other depth shapes (the IR night switch changes it), so
+        # switching back does not reseed from whoever is sitting there.
+        self._bgs: dict[tuple, np.ndarray] = {}
+        self.store: Optional[BackgroundStore] = None
+        self._next_save = 0.0
+        self.restored = False          # did this process start from a saved model?
         self._started = time.monotonic()
         self._present = False
         self._last_seen = 0.0          # monotonic; last probe that read occupied
@@ -234,13 +327,28 @@ class DepthPresence:
 
         with self._lock:
             if self._bg is None or self._bg_shape != d.shape:
-                # Seed the model with the current frame. Anything standing
-                # there at startup is therefore "background" until it moves —
-                # unavoidable without an empty-room calibration pass, and it
-                # self-corrects within seconds of the person moving.
-                self._bg = np.where(valid, d, self.far_mm).astype(np.float32)
+                if self._bg is not None:
+                    self._bgs[self._bg_shape] = self._bg
+                saved = self._bgs.pop(d.shape, None)
+                if saved is None and self.store is not None:
+                    saved = self.store.load(d.shape)
+                if saved is not None and _plausible(saved, d, valid, self.fg_gap_mm, self.far_mm):
+                    # The remembered EMPTY room: whoever is sitting there now
+                    # stays foreground instead of becoming wall.
+                    self._bg = saved.copy()
+                    self.restored = True
+                    log.info("presence: restored the empty-room model for %s", d.shape)
+                else:
+                    if saved is not None:
+                        log.warning("presence: saved empty-room model no longer "
+                                    "matches the scene (camera or room moved) — "
+                                    "relearning from the live frame")
+                    # Seed with the current frame. Anything standing there is
+                    # "background" until it moves away.
+                    self._bg = np.where(valid, d, self.far_mm).astype(np.float32)
                 self._bg_shape = d.shape
                 self._started = now
+                self._next_save = now + SAVE_EMPTY_S
             bg = self._bg
 
         in_band = valid & (d >= self.near_mm) & (d <= self.far_mm)
@@ -257,8 +365,23 @@ class DepthPresence:
                       and (now - self._static_since) >= self.static_absorb_s)
             self._adapt(d, valid, occupied, static)
             self._probes += 1
-        return self._publish(occupancy, valid_frac, nearest, now,
-                             measured=True, occupied=occupied)
+        result = self._publish(occupancy, valid_frac, nearest, now,
+                               measured=True, occupied=occupied)
+        self._maybe_save(now)
+        return result
+
+    def _maybe_save(self, now: float) -> None:
+        """Persist the model once the room has read empty for SAVE_EMPTY_S."""
+        if self.store is None or now < self._next_save:
+            return
+        with self._lock:
+            if self._present or self._bg is None:
+                return
+            if now - max(self._last_seen, self._started) < SAVE_EMPTY_S:
+                return
+            bg, shape = self._bg.copy(), self._bg_shape
+            self._next_save = now + SAVE_EVERY_S
+        self.store.save(bg, shape)
 
     def _publish(self, occupancy: float, valid_frac: float, nearest: Optional[int],
                  now: float, measured: bool, occupied: bool = False) -> PresenceResult:
@@ -314,11 +437,15 @@ class DepthPresence:
         with self._lock:
             self._bg = None
             self._bg_shape = None
+            self._bgs.clear()
+            self.restored = False
             self._present = False
             self._last_seen = 0.0
             self._prev = None
             self._static_since = None
             self._moved_frac = 0.0
+        if self.store is not None:
+            self.store.clear()
 
 
 class RegionPresence:
@@ -362,6 +489,14 @@ class RegionPresence:
         self._t = 0.0
         self._next_update = 0.0
         self._static_since: Optional[float] = None
+        self._bgs: dict[tuple, np.ndarray] = {}
+        self.store: Optional[BackgroundStore] = None
+        self.restored = False
+        self._empty_since: Optional[float] = None
+        self._next_save = 0.0
+        # Under this foreground fraction the whole aligned map counts as empty
+        # (sensor speckle along depth edges never reads exactly zero).
+        self.empty_frac = 0.003
 
     def _small(self, arr: np.ndarray) -> np.ndarray:
         k = self.decim
@@ -386,10 +521,26 @@ class RegionPresence:
         d = np.where(valid, d, 0.0)   # see DepthPresence.update
         with self._lock:
             if self._bg is None or self._shape != full_shape:
-                self._bg = np.where(valid, d, 0.0).astype(np.float32)
+                if self._bg is not None:
+                    self._bgs[self._shape] = self._bg
+                saved = self._bgs.pop(full_shape, None)
+                if saved is None and self.store is not None:
+                    saved = self.store.load(full_shape)
+                if saved is not None and _plausible(saved, d, valid, self.fg_gap_mm, 0.0):
+                    self._bg = saved.copy()   # see DepthPresence: the empty room
+                    self.restored = True
+                    log.info("region presence: restored the board/wall plane for %s",
+                             full_shape[:2])
+                else:
+                    if saved is not None:
+                        log.warning("region presence: saved plane no longer matches "
+                                    "the scene — relearning from the live frame")
+                    self._bg = np.where(valid, d, 0.0).astype(np.float32)
                 self._shape = full_shape
                 self._cur = d
                 self._t = time.time()
+                self._empty_since = None
+                self._next_save = now + SAVE_EMPTY_S
                 return
             bg = self._bg
             # Pixels that have never returned depth take the first value they get.
@@ -405,6 +556,11 @@ class RegionPresence:
             # Motion decides — the plane only grows around things that have
             # not moved at all for static_absorb_s.
             fg_now = valid & (bg > 0) & ((bg - d) >= self.fg_gap_mm)
+            if float(fg_now.sum()) / max(int(valid.sum()), 1) <= self.empty_frac:
+                if self._empty_since is None:
+                    self._empty_since = now
+            else:
+                self._empty_since = None
             static = self._static_locked(d, fg_now, self._cur, now)
             if static:
                 nearer = valid & (bg > 0) & (d < bg)
@@ -412,6 +568,14 @@ class RegionPresence:
                     bg[nearer] += 0.05 * (d[nearer] - bg[nearer])
             self._cur = d
             self._t = time.time()
+            save = None
+            if (self.store is not None and now >= self._next_save
+                    and self._empty_since is not None
+                    and now - self._empty_since >= SAVE_EMPTY_S):
+                save = (bg.copy(), full_shape)
+                self._next_save = now + SAVE_EVERY_S
+        if save is not None:
+            self.store.save(*save)
 
     def _static_locked(self, d: np.ndarray, fg: np.ndarray,
                        prev: Optional[np.ndarray], now: float) -> bool:
@@ -485,3 +649,8 @@ class RegionPresence:
             self._cur = None
             self._next_update = 0.0
             self._static_since = None
+            self._bgs.clear()
+            self.restored = False
+            self._empty_since = None
+        if self.store is not None:
+            self.store.clear()

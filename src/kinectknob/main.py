@@ -75,7 +75,7 @@ from .config import AppConfig
 from .controller import Controller
 from .gestures.engine import GestureEngine
 from .ha.client import HAClient
-from .presence import DepthPresence
+from .presence import DepthPresence, default_store
 from .schedule import OffWindow
 from .state import SharedState
 from .tuning import Tuning
@@ -170,6 +170,8 @@ class App:
             on_frac=p.on_frac, off_frac=p.off_frac, linger_s=p.linger_s,
             warmup_s=p.warmup_s, static_absorb_s=p.static_absorb_s,
         )
+        # Remember the empty room across restarts (see presence.py).
+        self.presence.store = default_store("room")
         self.shared.presence = self.presence
         self._capture = None
         self.off_window = OffWindow(cfg.schedule.off_window, cfg.schedule.tz)
